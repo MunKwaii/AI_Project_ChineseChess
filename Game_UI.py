@@ -225,7 +225,7 @@ class Game:
         self._screen.blit(message_surface, message_rect)
         self._screen.blit(message, message_rect)
         closing_message = FONT_DICT['font'].render('Please close this window.', True, color)
-        closing_message_rect = closing_message.get_rect(center=(280, 350))
+        closing_message_rect = closing_message.get_rect(center=(360, 400))
         closing_message_surface = pygame.Surface(closing_message.get_size())  
         closing_message_surface.fill(COLOR_DICT['white'])
         closing_message_surface.set_alpha(200)  

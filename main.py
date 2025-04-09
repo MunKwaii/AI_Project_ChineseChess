@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from Game_UI import Game  # Giả định đây là file Game.py bạn đã có
-from Player import MCTSPlayer  # Dùng MCTSPlayer của bạn
+from Player import MCTSPlayer, DQNAgent  # Dùng MCTSPlayer của bạn
 from PIL import Image, ImageTk
 import os
+import threading
 
 class ChineseChessApp:
     def __init__(self, root):
@@ -12,7 +13,8 @@ class ChineseChessApp:
         self.root.geometry("600x500")
         
         # Load MCTS player
-        self.player = MCTSPlayer(iterations=500)  # Khởi tạo MCTS với 50 lần lặp
+        self.loaded_agent = DQNAgent.load_full_model("trained_models/chinese_chess_dqn")
+        self.player = MCTSPlayer(iterations=100, simulate_fn=self.loaded_agent)
         
         # Sound states
         self.bgm_enabled = True

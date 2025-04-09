@@ -38,6 +38,9 @@ class ChessGame:
         self._move_count = move_count
         self._valid_moves = []
 
+        self.move_history = []  # Thêm lịch sử nước đi
+        self.last_move = None   # Lưu nước đi gần nhất
+
         self._recalculate_valid_moves() 
 
     def __str__(self):
@@ -71,26 +74,84 @@ class ChessGame:
         self._move_count += 1
 
         self._recalculate_valid_moves()
+        self.last_move = move
+        self.move_history.append(move)
 
     def copy_and_make_move(self, move):
-        if move not in self._valid_moves:
-            raise ValueError(f'Move "{move}" is not valid')
-
-        return ChessGame(board=self._board_after_move(move, self._is_red_active), red_active=not self._is_red_active, move_count=self._move_count + 1)
-
+        new_board = self._board_after_move(move, self._is_red_active)
+        new_game = ChessGame(board=new_board, 
+                            red_active=not self._is_red_active,
+                            move_count=self._move_count + 1)
+        new_game._valid_moves = []
+        return new_game
+    
     def is_red_move(self):
         return self._is_red_active
 
+    def is_in_check(self, board, is_red):
+        """Kiểm tra xem tướng của bên is_red có đang bị chiếu không"""
+        # Tìm vị trí của tướng
+        king_pos = None
+        king_piece = _Piece('k', is_red)
+        
+        for y in range(10):
+            for x in range(9):
+                if self._board[y][x] == king_piece:
+                    king_pos = (y, x)
+                    break
+            if king_pos is not None:
+                break
+        
+        if king_pos is None:
+            return False  # Tướng đã bị bắt, không cần kiểm tra chiếu
+        
+        # Kiểm tra xem có quân đối phương nào có thể ăn tướng không
+        for r in range(10):
+            for c in range(9):
+                piece = board[r][c]
+                if piece and piece.is_red != is_red:
+                    if self._can_piece_capture_king(board, (r, c), king_pos, piece.kind):
+                        return True
+        return False
+            
+        
+        return False
+
+    def is_checkmate(self):
+        """Kiểm tra xem có chiếu bí không"""
+        if not self.is_in_check(self._board, self._is_red_active):
+            return False
+        
+        # Kiểm tra xem có nước đi hợp lệ nào không
+        for move in self._valid_moves:
+            new_game = self.copy_and_make_move(move)
+            if not new_game.is_in_check(self._board, self._is_red_active):
+                return False
+        
+        return True
+
+    def is_stalemate(self):
+        """Kiểm tra xem có hết nước đi (stalemate) không"""
+        if self.is_in_check(self._board, self._is_red_active):
+            return False
+        
+        # Kiểm tra xem có nước đi hợp lệ nào không
+        return len(self._valid_moves) == 0
+
     def get_winner(self):
-        if self._move_count >= _MAX_MOVES: 
+        if self._move_count >= _MAX_MOVES:
             return 'Draw'
         elif all(self._board[y][x] != _Piece('k', True)
-                 for y in range(0, 10) for x in range(0, 9)):  
+                for y in range(0, 10) for x in range(0, 9)):
             return 'Black'
         elif all(self._board[y][x] != _Piece('k', False)
-                 for y in range(0, 10) for x in range(0, 9)): 
+                for y in range(0, 10) for x in range(0, 9)):
             return 'Red'
-        else:  
+        elif self.is_checkmate():
+            return 'Black' if self._is_red_active else 'Red'
+        elif self.is_stalemate():
+            return 'Draw'
+        else:
             return None
 
     def _calculate_moves_for_board(self, board, is_red_active):
@@ -299,8 +360,328 @@ class ChessGame:
 
         return board_copy
 
+    def _get_basic_moves(self, pos, piece_kind):
+        """Tính toán nước đi cơ bản không kiểm tra chiếu"""
+        y, x = pos
+        moves = []
+        piece = self._board[y][x]
+        
+        if piece_kind == 'r':  # Xe
+            for dy, dx in [(1,0), (-1,0), (0,1), (0,-1)]:
+                for i in range(1, 10):
+                    ny, nx = y + dy*i, x + dx*i
+                    if not (0 <= ny < 10 and 0 <= nx < 9):
+                        break
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                    if target is not None:
+                        break
+                            
+        elif piece_kind == 'h':  # Mã
+            horse_moves = [
+                (-2,-1), (-2,1), (-1,-2), (-1,2),
+                (1,-2), (1,2), (2,-1), (2,1)
+            ]
+            for dy, dx in horse_moves:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < 10 and 0 <= nx < 9:
+                    if abs(dy) == 2 and self._board[y + dy//2][x] is not None:
+                        continue
+                    if abs(dx) == 2 and self._board[y][x + dx//2] is not None:
+                        continue
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+            
+        elif piece_kind == 'e':  # Tượng
+            for dy, dx in [(-2,-2), (-2,2), (2,-2), (2,2)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < 10 and 0 <= nx < 9:
+                    if self._board[y + dy//2][x + dx//2] is None:
+                        if (self._is_red_active and ny >= 5) or (not self._is_red_active and ny <= 4):
+                            target = self._board[ny][nx]
+                            if target is None or target.is_red != self._is_red_active:
+                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+            
+        elif piece_kind == 'a':  # Sĩ
+            advisor_moves = [(-1,-1), (-1,1), (1,-1), (1,1)]
+            for dy, dx in advisor_moves:
+                ny, nx = y + dy, x + dx
+                if self._is_in_palace(ny, nx, self._is_red_active):
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+
+        elif piece_kind == 'k':  # Tướng
+            king_moves = [(1,0), (-1,0), (0,1), (0,-1)]
+            for dy, dx in king_moves:
+                ny, nx = y + dy, x + dx
+                if self._is_in_palace(ny, nx, self._is_red_active):
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+            self._check_face_to_face(pos, moves)
+
+        elif piece_kind == 'c':  # Pháo
+            for dy, dx in [(1,0), (-1,0), (0,1), (0,-1)]:
+                has_screen = False
+                for i in range(1, 10):
+                    ny, nx = y + dy*i, x + dx*i
+                    if not (0 <= ny < 10 and 0 <= nx < 9):
+                        break
+                    target = self._board[ny][nx]
+                    if not has_screen:
+                        if target is None:
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        else:
+                            has_screen = True
+                    else:
+                        if target is not None:
+                            if target.is_red != self._is_red_active:
+                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            break
+
+        elif piece_kind == 'p':  # Tốt
+            if self._is_red_active:
+                if y > 0:
+                    ny, nx = y-1, x
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                if y <= 4:
+                    if x > 0:
+                        ny, nx = y, x-1
+                        target = self._board[ny][nx]
+                        if target is None or target.is_red != piece.is_red:
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                    if x < 8:
+                        ny, nx = y, x+1
+                        target = self._board[ny][nx]
+                        if target is None or target.is_red != piece.is_red:
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+            else:
+                if y < 9:
+                    ny, nx = y+1, x
+                    target = self._board[ny][nx]
+                    if target is None or target.is_red != piece.is_red:
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                if y >= 5:
+                    if x > 0:
+                        ny, nx = y, x-1
+                        target = self._board[ny][nx]
+                        if target is None or target.is_red != piece.is_red:
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                    if x < 8:
+                        ny, nx = y, x+1
+                        target = self._board[ny][nx]
+                        if target is None or target.is_red != piece.is_red:
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+        return moves
+
+    def _is_in_palace(self, y, x, is_red):
+        """Kiểm tra vị trí có trong cung không"""
+        if is_red:
+            return 0 <= y <= 2 and 3 <= x <= 5
+        else:
+            return 7 <= y <= 9 and 3 <= x <= 5
+
+    def _check_face_to_face(self, pos, moves):
+        """Kiểm tra nước đi đối mặt tướng"""
+        y, x = pos
+        king_piece = _Piece('k', self._is_red_active)
+        opponent_king = _Piece('k', not self._is_red_active)
+        
+        # Tìm tướng đối phương
+        for ny in range(10):
+            if self._board[ny][x] == opponent_king:
+                # Kiểm tra không có quân cản
+                face_to_face = True
+                step = 1 if ny > y else -1
+                for i in range(y + step, ny, step):
+                    if self._board[i][x] is not None:
+                        face_to_face = False
+                        break
+                if face_to_face:
+                    moves.append(_get_wxf_movement(self._board, pos, (ny, x), self._is_red_active))
+                break
+
     def _recalculate_valid_moves(self):
-        self._valid_moves = self._calculate_moves_for_board(self._board, self._is_red_active)
+        raw_moves = []
+        for y in range(10):
+            for x in range(9):
+                piece = self._board[y][x]
+                if piece and piece.is_red == self._is_red_active:
+                    raw_moves += self._get_basic_moves((y, x), piece.kind)
+        
+        #Lọc nước đi hợp lệ
+        valid_moves = []
+        
+        for move in raw_moves:
+            temp_board = self._board_after_move(move, self._is_red_active)
+            if not self.is_in_check(temp_board, self._is_red_active):
+                valid_moves.append(move)
+        
+        self._valid_moves = valid_moves
+
+    def _can_piece_capture_king(self, board, piece_pos, king_pos, piece_kind):
+        """Kiểm tra 1 quân cờ có thể ăn tướng không."""
+        if piece_kind == 'r':  # Xe
+            return self._can_chariot_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'h':  # Mã
+            return self._can_horse_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'e':  # Tượng
+            return self._can_elephant_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'a':  # Sĩ
+            return self._can_advisor_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'k':  # Tướng
+            return self._can_king_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'c':  # Pháo
+            return self._can_cannon_capture(board, piece_pos, king_pos)
+        elif piece_kind == 'p':  # Tốt
+            return self._can_pawn_capture(board, piece_pos, king_pos)
+        return False
+
+    def _can_chariot_capture(self, board, chariot_pos, king_pos):
+        """Kiểm tra xe có thể bắt tướng."""
+        chariot_y, chariot_x = chariot_pos
+        king_y, king_x = king_pos
+
+        if chariot_y != king_y and chariot_x != king_x:
+            return False
+
+        if chariot_y == king_y:  # Cùng hàng
+            step = 1 if king_x > chariot_x else -1
+            current_x = chariot_x + step
+            while current_x != king_x:
+                if board[chariot_y][current_x] is not None:
+                    return False
+                current_x += step
+        else:  # Cùng cột
+            step = 1 if king_y > chariot_y else -1
+            current_y = chariot_y + step
+            while current_y != king_y:
+                if board[current_y][chariot_x] is not None:
+                    return False
+                current_y += step
+        return True
+
+    def _can_horse_capture(self, board, horse_pos, king_pos):
+        """Kiểm tra mã có thể bắt tướng."""
+        horse_y, horse_x = horse_pos
+        king_y, king_x = king_pos
+        
+        # 8 vị trí mã có thể nhảy
+        moves = [
+            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
+            (1, -2), (1, 2), (2, -1), (2, 1)
+        ]
+        
+        for dy, dx in moves:
+            new_y, new_x = horse_y + dy, horse_x + dx
+            if (new_y, new_x) == king_pos:
+                # Kiểm tra chân mã bị cản
+                if dy in (-2, 2):
+                    block_y = horse_y + (dy // 2)
+                    if board[block_y][horse_x] is None:
+                        return True
+                else:  # dx in (-2, 2)
+                    block_x = horse_x + (dx // 2)
+                    if board[horse_y][block_x] is None:
+                        return True
+        return False
+
+    def _can_elephant_capture(self, board, elephant_pos, king_pos):
+        """Kiểm tra tượng có thể bắt tướng."""
+        elephant_y, elephant_x = elephant_pos
+        king_y, king_x = king_pos
+        
+        # Tượng chỉ đi chéo 2 ô
+        if abs(elephant_y - king_y) == 2 and abs(elephant_x - king_x) == 2:
+            # Kiểm tra chân tượng (ô giữa)
+            block_y = (elephant_y + king_y) // 2
+            block_x = (elephant_x + king_x) // 2
+            if board[block_y][block_x] is None:
+                # Kiểm tra tượng không vượt sông
+                if (elephant_y < 5 and king_y < 5) or (elephant_y >= 5 and king_y >= 5):
+                    return True
+        return False
+
+    def _can_advisor_capture(self, board, advisor_pos, king_pos):
+        """Kiểm tra sĩ có thể bắt tướng."""
+        advisor_y, advisor_x = advisor_pos
+        king_y, king_x = king_pos
+        
+        # Sĩ chỉ đi chéo 1 ô trong cung
+        if abs(advisor_y - king_y) == 1 and abs(advisor_x - king_x) == 1:
+            # Kiểm tra vẫn ở trong cung
+            if 7 <= advisor_y <= 9 and 3 <= advisor_x <= 5:  # Cung đen
+                return True
+            elif 0 <= advisor_y <= 2 and 3 <= advisor_x <= 5:  # Cung đỏ
+                return True
+        return False
+
+    def _can_king_capture(self, board, king_pos, other_king_pos):
+        """Kiểm tra tướng có thể bắt tướng đối phương (đối diện)."""
+        king_y, king_x = king_pos
+        other_y, other_x = other_king_pos
+        
+        # Hai tướng phải cùng cột và không có quân cản
+        if king_x == other_x:
+            step = 1 if other_y > king_y else -1
+            current_y = king_y + step
+            while current_y != other_y:
+                if board[current_y][king_x] is not None:
+                    return False
+                current_y += step
+            return True
+        return False
+
+    def _can_cannon_capture(self, board, cannon_pos, king_pos):
+        """Kiểm tra pháo có thể bắt tướng."""
+        cannon_y, cannon_x = cannon_pos
+        king_y, king_x = king_pos
+        
+        if cannon_y != king_y and cannon_x != king_x:
+            return False
+        
+        count = 0  # Đếm số quân cản
+        
+        if cannon_y == king_y:  # Cùng hàng
+            step = 1 if king_x > cannon_x else -1
+            current_x = cannon_x + step
+            while current_x != king_x:
+                if board[cannon_y][current_x] is not None:
+                    count += 1
+                current_x += step
+        else:  # Cùng cột
+            step = 1 if king_y > cannon_y else -1
+            current_y = cannon_y + step
+            while current_y != king_y:
+                if board[current_y][cannon_x] is not None:
+                    count += 1
+                current_y += step
+        
+        # Pháo cần đúng 1 quân cản (ngòi)
+        return count == 1
+
+    def _can_pawn_capture(self, board, pawn_pos, king_pos):
+        """Kiểm tra tốt có thể bắt tướng."""
+        pawn_y, pawn_x = pawn_pos
+        king_y, king_x = king_pos
+        
+        # Tốt đi thẳng, khi qua sông có thể đi ngang
+        if board[pawn_y][pawn_x].is_red:  # Tốt đỏ
+            # Đi lên (đối với tốt đỏ)
+            if (pawn_y - 1 == king_y and pawn_x == king_x) or \
+            (pawn_y <= 4 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
+                return True
+        else:  # Tốt đen
+            # Đi xuống (đối với tốt đen)
+            if (pawn_y + 1 == king_y and pawn_x == king_x) or \
+            (pawn_y >= 5 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
+                return True
+        return False
 
 
 def print_board(board):
@@ -494,20 +875,34 @@ def _wxf_to_index_more_than_three_aligned(board, piece, is_red):
 
     locations_so_far = []
     while y <= 9:
-        if board[y][x] == _Piece('p', is_red):
+        if board[y][x] is not None and board[y][x].kind == 'p' and board[y][x].is_red == is_red:
             locations_so_far.append((y, x))
         x += 1
         if x >= 9:
             y += 1
             x = 0
+    if not locations_so_far:  # Không tìm thấy quân cờ nào
+        print_board(board)
+        print(piece)
+        raise ValueError('Invalid piece - no pawns found')
+    
+    x_counts = {}
+    for y, x in locations_so_far:
+        x_counts[x] = x_counts.get(x, 0) + 1
 
-    x_values = [l[1] for l in locations_so_far]
-    mode = statistics.mode(x_values)
+    if not x_counts:  # Trường hợp không có quân cờ nào (không nên xảy ra do check ở trên)
+        print_board(board)
+        print(piece)
+        raise ValueError('Invalid piece - no pawns found')
+
+    mode = max(x_counts.items(), key=lambda item: item[1])[0]
     aligned_pieces = [l for l in locations_so_far if l[1] == mode]
     aligned_pieces.sort()
 
     if len(aligned_pieces) < 3:
-        raise ValueError('Invalid piece')
+        print_board(board)
+        print(piece)
+        raise ValueError('Invalid piece - less than 3 aligned pawns')
 
     if is_red:
         return aligned_pieces[int(piece_type) - 1]
@@ -668,6 +1063,10 @@ def _absolute_king(board, pos):
     elif pos[0] in {1, 2} and side == -1:
         points_so_far += 10
 
+    game = ChessGame(board, red_active=piece.is_red)
+
+    if game.is_in_check(board, piece.is_red):
+        points_so_far -= 500 * side
     return points_so_far
 
 
@@ -712,7 +1111,6 @@ def piece_count(board):
             pieces_so_far += 1
 
     return pieces_so_far
-
 
 class _Piece:
     def __init__(self, kind, is_red):
