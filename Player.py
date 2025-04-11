@@ -158,6 +158,30 @@ class MCTSPlayer(Player):
             captured = board[y][x]
             if captured and captured.is_red != game.is_red_move():
                 total_score += 100 if captured.kind in {'r', 'c', 'h'} else 50
+                
+        is_red = game.is_red_move()
+        # Phạt nếu quân nằm trong khu vực nguy hiểm
+        penalty_dict = {
+            'r': -150,  # Xe
+            'c': -120,  # Pháo
+            'h': -100,  # Mã
+            'p': -50,   # Tốt
+            'k': -300,  # Tướng
+            'a': -80,   # Sĩ
+            'e': -80    # Tượng
+        }
+        opponent_moves = game.get_opponent_valid_moves(is_red)
+        for y in range(10):
+            for x in range(9):
+                piece = board[y][x]
+                if piece and piece.is_red == is_red:
+                    # Kiểm tra xem vị trí (y, x) có nằm trong tầm tấn công của đối thủ không
+                    for opp_move in opponent_moves:
+                        opp_y, opp_x = _get_index_movement(board, opp_move, not is_red)
+                        if opp_y == y and opp_x == x:
+                            # Quân tại (y, x) có thể bị ăn
+                            total_score += penalty_dict.get(piece.kind, -50)
+                            break
 
         # Chuẩn hóa điểm số
         total_score = total_score / 10000 * (1 if game.is_red_move() else -1)
