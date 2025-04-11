@@ -9,23 +9,8 @@ from keras.layers import Dense, Conv2D, Flatten
 from keras.optimizers import Adam
 import json
 import os
-from datetime import datetime
 
-class Player:
-    def make_move(self, game, previous_move):
-        raise NotImplementedError("Phải triển khai make_move trong lớp con")
-
-    def reload_tree(self):
-        raise NotImplementedError("Phải triển khai reload_tree trong lớp con")
-
-class RandomPlayer(Player):
-    def make_move(self, game, previous_move):
-        valid_moves = game.get_valid_moves()
-        return random.choice(valid_moves) if valid_moves else None
-
-    def reload_tree(self):
-        pass
-
+# Lớp MCTSNode
 class MCTSNode:
     def __init__(self, game, move=None, parent=None):
         self.game = game
@@ -54,32 +39,22 @@ class MCTSNode:
         if self.parent:
             self.parent.backpropagate(-value)
 
-class MCTSPlayer(Player):
-    def __init__(self, iterations=1000, exploration_weight=1.0, simulate_fn=None):
+# Lớp MCTSPlayer tích hợp DQN
+class MCTSPlayer:
+    def __init__(self, dqn_agent, iterations=1000, exploration_weight=1.0):
+        self.dqn_agent = dqn_agent  # Sử dụng DQNAgent thay vì simulate_fn riêng
         self.iterations = iterations
         self.exploration_weight = exploration_weight
-        self.simulate_fn = simulate_fn if simulate_fn else self.default_evaluate_board
         self.move_history = deque(maxlen=50)
         self.opening_move_index = {'Red': 0, 'Black': 0}
-        self.experience_buffer = deque(maxlen=10000)
         self.opening_moves = {
-            'Red': [
-                "c2.5",
-                "p3+1",
-                "h2+3",
-                "r1.2",
-                "h8+9",
-                "r2+6",
-            ],
-            'Black': [
-                "h8+7",
-                "r9+1",
-                "r9.4",
-                "c8-1",
-                "c8.5",
-                "r4+6", 
-            ]
+            'Red': ["c2.5", "p3+1", "h2+3", "r1.2", "h8+9", "r2+6"],
+            'Black': ["h8+7", "r9+1", "r9.4", "c8-1", "c8.5", "r4+6"]
         }
+
+    def reset_opening(self):
+        self.opening_move_index = {'Red': 0, 'Black': 0}
+        self.move_history.clear()
 
     def board_to_tensor(self, game):
         board = game.get_board()
@@ -93,99 +68,88 @@ class MCTSPlayer(Player):
                         tensor[r, c, list(PIECES.keys()).index(key)] = 1
         return tensor
 
-    def evaluate_with_dqn(self, game):
-        if self.simulate_fn == self.default_evaluate_board:
-            return self.default_evaluate_board(game)
-        state_tensor = self.board_to_tensor(game)
-        q_values = self.simulate_fn.main_network.predict(state_tensor[np.newaxis, ...], verbose=0)
-        return np.max(q_values)
-
     def default_evaluate_board(self, game):
         board = game.get_board()
+        is_red = game.is_red_move()
+        side_modifier = 1 if is_red else -1
+
         total_score = calculate_absolute_points(board)
 
-        # Thưởng khi kiểm soát trung tâm
-        for y in range(4, 6):
-            for x in range(3, 6):
-                piece = board[y][x]
-                if piece and piece.is_red == game.is_red_move():
-                    total_score += 50 if piece.kind in {'r', 'c'} else 30 if piece.kind == 'h' else 10
+        # # Thưởng kiểm soát trung tâm
+        # for y in range(4, 6):
+        #     for x in range(3, 6):
+        #         piece = board[y][x]
+        #         if piece and piece.is_red == is_red:
+        #             bonus = 50 if piece.kind in {'r', 'c'} else 30 if piece.kind == 'h' else 10
+        #             total_score += bonus * side_modifier
 
         # Phạt nếu bị chiếu
-        if game.is_in_check(board, game.is_red_move()):
-            total_score -= 200
+        # if game.is_in_check(board, is_red):
+        #     total_score += (-200) * side_modifier
 
-        # Thưởng nếu chiếu được tướng địch
-        if game.is_in_check(board, not game.is_red_move()):
-            total_score += 300
+        # # Thưởng nếu chiếu tướng địch
+        # if game.is_in_check(board, not is_red):
+        #     total_score += 300 * side_modifier
 
-        # Thưởng nếu pháo có "ngòi" để tấn công
-        for y in range(10):
-            for x in range(9):
-                piece = board[y][x]
-                if piece and piece.kind == 'c' and piece.is_red == game.is_red_move():
-                    for direction in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                        screen_count = 0
-                        for i in range(1, 10):
-                            ny, nx = y + direction[0] * i, x + direction[1] * i
-                            if not (0 <= ny < 10 and 0 <= nx < 9):
-                                break
-                            if board[ny][nx]:
-                                screen_count += 1
-                            if screen_count == 1 and i < 9:
-                                total_score += 20
-                                break
+        # # Thưởng nếu pháo có ngòi
+        # for y in range(10):
+        #     for x in range(9):
+        #         piece = board[y][x]
+        #         if piece and piece.kind == 'c' and piece.is_red == is_red:
+        #             for direction in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+        #                 screen_count = 0
+        #                 for i in range(1, 10):
+        #                     ny, nx = y + direction[0] * i, x + direction[1] * i
+        #                     if not (0 <= ny < 10 and 0 <= nx < 9):
+        #                         break
+        #                     if board[ny][nx]:
+        #                         screen_count += 1
+        #                     if screen_count == 1 and i < 9:
+        #                         total_score += 20 * side_modifier
+        #                         break
 
-        # Phạt mạnh nếu nước đi lặp lại
+        # Phạt lặp nước đi
         current_move = self.move_history[-1] if self.move_history else None
         if current_move and list(self.move_history).count(current_move) >= 2:
-            total_score -= 500  # Tăng mức phạt để tránh lặp lại
+            total_score += (-100) * side_modifier
 
-        # Thưởng nếu xe hoặc pháo di chuyển đến gần cung đối phương
-        for y in range(10):
-            for x in range(9):
-                piece = board[y][x]
-                if piece and piece.is_red == game.is_red_move() and piece.kind in {'r', 'c'}:
-                    if piece.is_red and y <= 2:  # Xe/pháo đỏ đến gần cung đen
-                        total_score += 100
-                    elif not piece.is_red and y >= 7:  # Xe/pháo đen đến gần cung đỏ
-                        total_score -= 100
+        # # Thưởng xe/pháo gần cung địch
+        # for y in range(10):
+        #     for x in range(9):
+        #         piece = board[y][x]
+        #         if piece and piece.is_red == is_red and piece.kind in {'r', 'c'}:
+        #             if piece.is_red and y <= 2:
+        #                 total_score += 100 * side_modifier
+        #             elif not piece.is_red and y >= 7:
+        #                 total_score += 100 * side_modifier
 
-        # Thưởng nếu có cơ hội ăn quân
-        for move in game.get_valid_moves():
-            next_game = game.copy_and_make_move(move)
-            y, x = _get_index_movement(board, move, game.is_red_move())
-            captured = board[y][x]
-            if captured and captured.is_red != game.is_red_move():
-                total_score += 100 if captured.kind in {'r', 'c', 'h'} else 50
-                
-        is_red = game.is_red_move()
-        # Phạt nếu quân nằm trong khu vực nguy hiểm
-        penalty_dict = {
-            'r': -150,  # Xe
-            'c': -120,  # Pháo
-            'h': -100,  # Mã
-            'p': -50,   # Tốt
-            'k': -300,  # Tướng
-            'a': -80,   # Sĩ
-            'e': -80    # Tượng
-        }
-        opponent_moves = game.get_opponent_valid_moves(is_red)
-        for y in range(10):
-            for x in range(9):
-                piece = board[y][x]
-                if piece and piece.is_red == is_red:
-                    # Kiểm tra xem vị trí (y, x) có nằm trong tầm tấn công của đối thủ không
-                    for opp_move in opponent_moves:
-                        opp_y, opp_x = _get_index_movement(board, opp_move, not is_red)
-                        if opp_y == y and opp_x == x:
-                            # Quân tại (y, x) có thể bị ăn
-                            total_score += penalty_dict.get(piece.kind, -50)
-                            break
+        # # Thưởng cơ hội ăn quân
+        # for move in game.get_valid_moves():
+        #     next_game = game.copy_and_make_move(move)
+        #     y, x = _get_index_movement(board, move, is_red)
+        #     captured = board[y][x]
+        #     if captured and captured.is_red != is_red:
+        #         bonus = 100 if captured.kind in {'r', 'c', 'h'} else 50
+        #         total_score += bonus * side_modifier
 
-        # Chuẩn hóa điểm số
-        total_score = total_score / 10000 * (1 if game.is_red_move() else -1)
-        return min(max(total_score, -1), 1)
+        # # Phạt nếu quân nằm trong khu vực nguy hiểm
+        # penalty_dict = {
+        #     'r': -150, 'c': -120, 'h': -100, 'p': -50,
+        #     'k': -300, 'a': -80, 'e': -80
+        # }
+        # opponent_moves = game.calculate_opponent_moves()
+        # for y in range(10):
+        #     for x in range(9):
+        #         piece = board[y][x]
+        #         if piece and piece.is_red == is_red:
+        #             for opp_move in opponent_moves:
+        #                 opp_y, opp_x = _get_index_movement(board, opp_move, not is_red)
+        #                 if opp_y == y and opp_x == x:
+        #                     penalty = penalty_dict.get(piece.kind, -50)
+        #                     total_score += penalty * side_modifier
+        #                     break
+
+        return min(max(total_score / 10000, -1), 1)
 
     def make_move(self, game, previous_move):
         valid_moves = game.get_valid_moves()
@@ -197,10 +161,10 @@ class MCTSPlayer(Player):
             opening_move = self.opening_moves[side][self.opening_move_index[side]]
             if opening_move in valid_moves:
                 self.move_history.append(opening_move)
-                self.opening_move_index[side] += 1  # Chỉ tăng khi nước đi hợp lệ
+                self.opening_move_index[side] += 1
                 return opening_move
 
-        # Nếu không còn nước đi khai cuộc hoặc nước đi không hợp lệ, chuyển sang MCTS
+        # Chuyển sang MCTS nếu hết khai cuộc
         root = MCTSNode(game)
         for _ in range(self.iterations):
             node = root
@@ -209,13 +173,11 @@ class MCTSPlayer(Player):
             if node.game.get_winner() is None:
                 node = node.expand()
             if node:
-                value = self.evaluate_with_dqn(node.game)
+                state_tensor = self.board_to_tensor(node.game)
+                value = self.dqn_agent.main_network.predict(state_tensor[np.newaxis, ...], verbose=0).max()
+                if value < 0.1:  # Nếu DQN không tự tin, dùng đánh giá mặc định
+                    value = self.default_evaluate_board(node.game)
                 node.backpropagate(value)
-                self.experience_buffer.append((
-                    self.board_to_tensor(node.parent.game), node.move, value,
-                    self.board_to_tensor(node.game), node.game.get_winner()))
-            else:
-                break
 
         if not root.children:
             return random.choice(valid_moves) if valid_moves else None
@@ -228,170 +190,99 @@ class MCTSPlayer(Player):
             if captured and captured.is_red != game.is_red_move():
                 capturing_moves.append((child.move, child.visits))
 
-        if capturing_moves:
-            best_move = max(capturing_moves, key=lambda x: x[1])[0]
-        else:
-            best_move = max(root.children, key=lambda c: c.visits).move
-
+        best_move = max(capturing_moves, key=lambda x: x[1])[0] if capturing_moves else \
+                    max(root.children, key=lambda c: c.visits).move
         self.move_history.append(best_move)
         return best_move
 
-    def reload_tree(self):
-        pass
-
+# Lớp DQNAgent
 class DQNAgent:
     def __init__(self, state_size=(10, 9, len(PIECES)), action_size=200):
         self.state_size = state_size
         self.action_size = action_size
-        
-        self.replay_buffer = deque(maxlen=100000)
-
+        self.replay_buffer = deque(maxlen=50000)
         self.gamma = 0.99
         self.epsilon = 1.0
-        self.epsilon_min = 0.001
-        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.98
         self.learning_rate = 0.001
-        self.update_targetnn_rate = 100
+        self.update_targetnn_rate = 10
         self.batch_size = 64
-
         self.main_network = self.get_nn()
         self.target_network = self.get_nn()
-
         self.target_network.set_weights(self.main_network.get_weights())
-        self.steps_since_update = 0
-
-    def _initialize_buffer(self):
-        """Thêm các experience ngẫu nhiên ban đầu vào buffer"""
-        for _ in range(1000):  # Số lượng experience khởi tạo
-            # Tạo state ngẫu nhiên
-            state = np.random.random(self.state_size).astype(np.float32)
-            action = np.random.randint(self.action_size)
-            reward = np.random.uniform(-1, 1)
-            next_state = np.random.random(self.state_size).astype(np.float32)
-            done = random.random() < 0.1  # 10% xác suất kết thúc
-            
-            self.replay_buffer.append((state, action, reward, next_state, done))
+        self.total_time_step = 0
 
     def get_nn(self):
-        """Build the neural network architecture."""
         model = Sequential([
-            Conv2D(64, (3, 3), activation='relu', padding='same', input_shape=self.state_size),
+            Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=self.state_size),
             Conv2D(64, (3, 3), activation='relu', padding='same'),
-            Conv2D(128, (3, 3), activation='relu', padding='same'),
             Flatten(),
-            Dense(512, activation='relu'),
-            Dense(512, activation='relu'),
+            Dense(256, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='huber', optimizer=Adam(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
         return model
-    
+
+    def board_to_tensor(self, game):
+        board = game.get_board()
+        tensor = np.zeros((10, 9, len(PIECES)), dtype=np.float32)
+        for r in range(10):
+            for c in range(9):
+                piece = board[r][c]
+                if piece:
+                    key = (piece.kind, piece.is_red)
+                    if key in PIECES:
+                        tensor[r, c, list(PIECES.keys()).index(key)] = 1
+        return tensor
+
     def encode_move(self, move, valid_moves):
         return valid_moves.index(move) if move in valid_moves else 0
-    
-    def decode_move(self, index, valid_moves):
-        return valid_moves[index] if index < len(valid_moves) else None
-    
+
     def save_experience(self, state, action, reward, next_state, terminal):
         self.replay_buffer.append((state, action, reward, next_state, terminal))
 
     def get_batch_from_buffer(self, batch_size):
         exp_batch = random.sample(self.replay_buffer, batch_size)
-        state_batch  = np.array([batch[0] for batch in exp_batch])
+        state_batch = np.array([batch[0] for batch in exp_batch])
         action_batch = np.array([batch[1] for batch in exp_batch])
         reward_batch = [batch[2] for batch in exp_batch]
         next_state_batch = np.array([batch[3] for batch in exp_batch])
         terminal_batch = [batch[4] for batch in exp_batch]
         return state_batch, action_batch, reward_batch, next_state_batch, terminal_batch
-    
-    def tensor_to_board(self, tensor):
-        """Chuyển tensor về dạng board game"""
-        board = [[None for _ in range(9)] for _ in range(10)]
-        piece_keys = list(PIECES.keys())
-        
-        for y in range(10):
-            for x in range(9):
-                piece_idx = np.argmax(tensor[y, x])
-                if piece_idx > 0:
-                    kind, is_red = piece_keys[piece_idx - 1]
-                    board[y][x] = _Piece(kind, is_red)
-        return board
 
-    def train_main_network(self):
-        state_batch, action_batch, reward_batch, next_state_batch, terminal_batch = self.get_batch_from_buffer(self.batch_size)
-
-        # Lấy Q value của state hiện tại
+    def train_main_network(self, batch_size):
+        if len(self.replay_buffer) < batch_size:
+            return
+        state_batch, action_batch, reward_batch, next_state_batch, terminal_batch = self.get_batch_from_buffer(batch_size)
         q_values = self.main_network.predict(state_batch, verbose=0)
-
-        # Lấy Max Q values của state S' (State chuyển từ S với action A)
         next_q_values = self.target_network.predict(next_state_batch, verbose=0)
         max_next_q = np.amax(next_q_values, axis=1)
 
-        for i in range(self.batch_size):
-            new_q_values = reward_batch[i] if terminal_batch[i] else reward_batch[i] + self.gamma *max_next_q[i]
+        for i in range(batch_size):
+            new_q_values = reward_batch[i] if terminal_batch[i] else reward_batch[i] + self.gamma * max_next_q[i]
             q_values[i][action_batch[i]] = new_q_values
 
-        self.main_network.fit(state_batch, q_values, batch_size=self.batch_size, verbose=0)
+        self.main_network.fit(state_batch, q_values, verbose=0)
 
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-        
-        # Update target network periodically
-        self.steps_since_update += 1
-        if self.steps_since_update >= self.update_targetnn_rate:
-            self.target_network.set_weights(self.main_network.get_weights())
-            self.steps_since_update = 0
-    
-
-    def make_decision(self, state, valid_moves, training=True):
-        if training and random.uniform(0,1) < self.epsilon:
+    def make_decision(self, state, valid_moves):
+        if random.uniform(0, 1) < self.epsilon:
             return random.choice(valid_moves)
-
         state = state[np.newaxis, ...]
         q_values = self.main_network.predict(state, verbose=0)[0]
-        
-        # Filter Q-values for valid moves only
         valid_indices = [self.encode_move(move, valid_moves) for move in valid_moves]
         valid_q = [q_values[i] for i in valid_indices]
-        
-        # Return move with highest Q-value
-        best_idx = np.argmax(valid_q)
-        return valid_moves[best_idx]
+        return valid_moves[np.argmax(valid_q)]
     
-    def save_model(self, model_path, target_path=None):
-        """Lưu trọng số của cả main network và target network"""
-        self.main_network.save_weights(model_path)
-        if target_path:
-            self.target_network.save_weights(target_path)
-    
-    def load_model(self, model_path, target_path=None):
-        """Tải trọng số đã lưu"""
-        self.main_network.load_weights(model_path)
-        if target_path:
-            self.target_network.load_weights(target_path)
-        else:
-            # Nếu chỉ có 1 file, dùng chung cho cả target network
-            self.target_network.set_weights(self.main_network.get_weights())
-    
-    def save_experience_buffer(self, buffer_path):
-        """Lưu experience buffer để tiếp tục train sau"""
-        np.save(buffer_path, np.array(self.replay_buffer, dtype=object))
-    
-    def load_experience_buffer(self, buffer_path):
-        """Tải experience buffer đã lưu"""
-        buffer = np.load(buffer_path, allow_pickle=True)
-        self.replay_buffer = deque(buffer, maxlen=self.replay_buffer.maxlen)
-
-    def save_full_model(self, base_path):
-        """Lưu toàn bộ thông tin cần thiết để khôi phục agent"""
-        # Lưu trọng số model
+    def save(self, base_path):
+        """Lưu toàn bộ trạng thái của agent"""
+        os.makedirs(os.path.dirname(base_path), exist_ok=True)
+        # Lưu trọng số main_network và target_network
         self.main_network.save_weights(f"{base_path}_main.weights.h5")
         self.target_network.save_weights(f"{base_path}_target.weights.h5")
-        
-        # Lưu experience buffer
+        # Lưu replay_buffer
         np.save(f"{base_path}_exp.npy", np.array(self.replay_buffer, dtype=object))
-        
-        # Lưu hyperparameters
+        # Lưu siêu tham số
         params = {
             'gamma': self.gamma,
             'epsilon': self.epsilon,
@@ -399,78 +290,101 @@ class DQNAgent:
             'epsilon_decay': self.epsilon_decay,
             'learning_rate': self.learning_rate,
             'batch_size': self.batch_size,
-            'update_targetnn_rate': self.update_targetnn_rate
+            'update_targetnn_rate': self.update_targetnn_rate,
+            'total_time_step': self.total_time_step
         }
         with open(f"{base_path}_params.json", 'w') as f:
             json.dump(params, f)
-    
-    @classmethod
-    def load_full_model(cls, base_path, training=False):
-        """Tải toàn bộ model từ file đã lưu"""
-        # Đọc hyperparameters
+        print(f"Đã lưu toàn bộ mô hình tại {base_path}")
+
+    def load(self, base_path):
+        """Tải toàn bộ trạng thái của agent"""
+        self.main_network.load_weights(f"{base_path}_main.weights.h5")
+        self.target_network.load_weights(f"{base_path}_target.weights.h5")
+        buffer = np.load(f"{base_path}_exp.npy", allow_pickle=True)
+        self.replay_buffer = deque(buffer, maxlen=self.replay_buffer.maxlen)
         with open(f"{base_path}_params.json", 'r') as f:
             params = json.load(f)
-        
-        # Khởi tạo agent
-        agent = cls(state_size=(10, 9, len(PIECES)))
-        agent.gamma = params['gamma']
-        agent.epsilon = params['epsilon']
-        agent.epsilon_min = params['epsilon_min']
-        agent.epsilon_decay = params['epsilon_decay']
-        agent.learning_rate = params['learning_rate']
-        agent.batch_size = params['batch_size']
-        agent.update_targetnn_rate = params['update_targetnn_rate']
-        
-        # Tải trọng số model
-        agent.main_network.load_weights(f"{base_path}_main.weights.h5")
-        agent.target_network.load_weights(f"{base_path}_target.weights.h5")
-        
-        # Tải experience buffer
-        exp_buffer = np.load(f"{base_path}_exp.npy", allow_pickle=True)
-        agent.replay_buffer = deque(exp_buffer, maxlen=agent.replay_buffer.maxlen)
-        
-        return agent
+            self.gamma = params['gamma']
+            self.epsilon = params['epsilon']
+            self.epsilon_min = params['epsilon_min']
+            self.epsilon_decay = params['epsilon_decay']
+            self.learning_rate = params['learning_rate']
+            self.batch_size = params['batch_size']
+            self.update_targetnn_rate = params['update_targetnn_rate']
+            self.total_time_step = params['total_time_step']
+        print(f"Đã tải mô hình từ {base_path}")
 
-if __name__ == '__main__':    
-    dqn_agent = DQNAgent(state_size=(10, 9, len(PIECES)), action_size=1000)
-    mcts_player = MCTSPlayer(simulate_fn=dqn_agent, iterations=500)
+# Chương trình chính
+if __name__ == "__main__":
+    # Khởi tạo game và tham số
+    env = ChessGame()
+    state_size = (10, 9, len(PIECES))
+    action_size = 200
+    n_episodes = 100
+    n_timesteps = 500
+    batch_size = 64
 
-    # Nếu muốn tải mô hình đã huấn luyện
-    # dqn_agent = DQNAgent.load_full_model("trained_models/chinese_chess_dqn", training=True)
-    # mcts_player.load_training_data("mcts_experience.npy")
+    # Khởi tạo agent
+    dqn_agent = DQNAgent(state_size=state_size, action_size=action_size)
+    mcts_player = MCTSPlayer(dqn_agent=dqn_agent, iterations=500)
 
-    # Huấn luyện
-    for episode in range(200):
-        game = ChessGame()
-        print(f"\n=== Ván {episode + 1} ===")
-        move_count = 0
-        
-        while game.get_winner() is None and move_count < 100:
-            move = mcts_player.make_move(game, game.last_move)
-            if move is None:
+    for ep in range(n_episodes):
+        ep_rewards = 0
+        env = ChessGame()  # Reset môi trường
+        mcts_player.reset_opening()
+        state = dqn_agent.board_to_tensor(env)
+        print(f"\n=== Ván {ep + 1} ===")
+
+        for t in range(n_timesteps):
+            dqn_agent.total_time_step += 1
+
+            # Cập nhật target network
+            if dqn_agent.total_time_step % dqn_agent.update_targetnn_rate == 0:
+                dqn_agent.target_network.set_weights(dqn_agent.main_network.get_weights())
+
+            # Chọn nước đi bằng MCTS
+            action = mcts_player.make_move(env, env.last_move)
+            if action is None:
                 print("Không còn nước đi hợp lệ!")
                 break
-                
-            print(f"Nước đi: {move}")
-            game.make_move(move)
-            print(game)
-            
-            # Huấn luyện DQN từ bộ nhớ kinh nghiệm
-            if len(dqn_agent.replay_buffer) >= dqn_agent.batch_size:
-                dqn_agent.train_main_network()
-            
-            move_count += 1
-        
-        winner = game.get_winner()
-        print(f"Kết quả ván {episode + 1}: {winner if winner else 'Chưa có người thắng'}")
-        
-        # Lưu mô hình và bộ nhớ kinh nghiệm sau mỗi 10 ván
-        if (episode + 1) % 10 == 0:
-            dqn_agent.save_full_model(f"trained_models/chinese_chess_dqn_{episode + 1}")
-            mcts_player.save_training_data(f"mcts_experience_{episode + 1}.npy")
-            print(f"Đã lưu mô hình và bộ nhớ kinh nghiệm tại ván {episode + 1}")
 
-    # Lưu mô hình cuối cùng
-    dqn_agent.save_full_model("trained_models/chinese_chess_dqn_final")
-    mcts_player.save_training_data("mcts_experience_final.npy")
-    print("Đã lưu mô hình và bộ nhớ kinh nghiệm cuối cùng.")
+            # Thực hiện nước đi
+            env.make_move(action)
+            env.__str__()
+            next_state = dqn_agent.board_to_tensor(env)
+            reward = mcts_player.default_evaluate_board(env)
+            terminal = env.get_winner() is not None
+
+            # Lưu kinh nghiệm vào buffer của DQN
+            action_idx = dqn_agent.encode_move(action, env.get_valid_moves())
+            dqn_agent.save_experience(state, action_idx, reward, next_state, terminal)
+
+            state = next_state
+            ep_rewards += reward
+
+            print(f"Nước đi: {action} | Điểm: {reward:.4f}")
+
+            if terminal:
+                winner = env.get_winner()
+                print(f"Ván {ep + 1} kết thúc với người thắng: {winner}, Tổng điểm: {ep_rewards:.4f}")
+                break
+
+            # Huấn luyện DQN nếu đủ dữ liệu
+            if len(dqn_agent.replay_buffer) > batch_size:
+                dqn_agent.train_main_network(batch_size)
+
+        # Giảm epsilon sau mỗi episode
+        if dqn_agent.epsilon > dqn_agent.epsilon_min:
+            dqn_agent.epsilon *= dqn_agent.epsilon_decay
+
+        # In kết quả nếu không kết thúc sớm
+        if not terminal:
+            print(f"Ván {ep + 1} đạt {t + 1} nước đi, Tổng điểm: {ep_rewards:.4f}")
+        
+        if (ep + 1) % 10 == 0:
+            dqn_agent.save(f"trained_models/chinese_chess_dqn_{ep + 1}")
+
+    # Lưu mô hình sau khi huấn luyện
+    dqn_agent.main_network.save("trained_models/chinese_chess_dqn_final")
+    print("Đã lưu mô hình cuối cùng.")

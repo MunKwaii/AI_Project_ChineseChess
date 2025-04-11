@@ -99,6 +99,7 @@ class ChessGame:
             if not new_game.is_in_check(new_game._board, self._is_red_active):
                 return False
         return True
+
     def is_in_check(self, board, is_red):
         king_pos = None
         king_piece = _Piece('k', is_red)
@@ -149,6 +150,7 @@ class ChessGame:
             return 'Draw'
         else:
             return None
+
     def _calculate_moves_for_board(self, board, is_red_active):
         moves = []
 
@@ -356,7 +358,7 @@ class ChessGame:
 
         return board_copy
 
-    def _get_basic_moves(self, pos, piece_kind):
+    def _get_basic_moves(self, pos, piece_kind, is_red):
         """Tính toán nước đi cơ bản không kiểm tra chiếu"""
         y, x = pos
         moves = []
@@ -370,7 +372,7 @@ class ChessGame:
                         break
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                     if target is not None:
                         break
 
@@ -388,36 +390,36 @@ class ChessGame:
                         continue
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
 
         elif piece_kind == 'e':  # Tượng
             for dy, dx in [(-2,-2), (-2,2), (2,-2), (2,2)]:
                 ny, nx = y + dy, x + dx
                 if 0 <= ny < 10 and 0 <= nx < 9:
                     if self._board[y + dy//2][x + dx//2] is None:
-                        if (self._is_red_active and ny >= 5) or (not self._is_red_active and ny <= 4):
+                        if (is_red and ny >= 5) or (not is_red and ny <= 4):
                             target = self._board[ny][nx]
-                            if target is None or target.is_red != self._is_red_active:
-                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            if target is None or target.is_red != is_red:
+                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
 
         elif piece_kind == 'a':  # Sĩ
             advisor_moves = [(-1,-1), (-1,1), (1,-1), (1,1)]
             for dy, dx in advisor_moves:
                 ny, nx = y + dy, x + dx
-                if self._is_in_palace(ny, nx, self._is_red_active):
+                if self._is_in_palace(ny, nx, is_red):
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
 
         elif piece_kind == 'k':  # Tướng
             king_moves = [(1,0), (-1,0), (0,1), (0,-1)]
             for dy, dx in king_moves:
                 ny, nx = y + dy, x + dx
-                if self._is_in_palace(ny, nx, self._is_red_active):
+                if self._is_in_palace(ny, nx, is_red):
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
-            self._check_face_to_face(pos, moves)
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
+            self._check_face_to_face(pos, moves, is_red)
 
         elif piece_kind == 'c':  # Pháo
             for dy, dx in [(1,0), (-1,0), (0,1), (0,-1)]:
@@ -429,50 +431,50 @@ class ChessGame:
                     target = self._board[ny][nx]
                     if not has_screen:
                         if target is None:
-                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                         else:
                             has_screen = True
                     else:
                         if target is not None:
-                            if target.is_red != self._is_red_active:
-                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            if target.is_red != piece.is_red:
+                                moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                             break
 
         elif piece_kind == 'p':  # Tốt
-            if self._is_red_active:
+            if is_red:
                 if y > 0:
                     ny, nx = y-1, x
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                 if y <= 4:
                     if x > 0:
                         ny, nx = y, x-1
                         target = self._board[ny][nx]
                         if target is None or target.is_red != piece.is_red:
-                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                     if x < 8:
                         ny, nx = y, x+1
                         target = self._board[ny][nx]
                         if target is None or target.is_red != piece.is_red:
-                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
             else:
                 if y < 9:
                     ny, nx = y+1, x
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
-                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                        moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                 if y >= 5:
                     if x > 0:
                         ny, nx = y, x-1
                         target = self._board[ny][nx]
                         if target is None or target.is_red != piece.is_red:
-                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
                     if x < 8:
                         ny, nx = y, x+1
                         target = self._board[ny][nx]
                         if target is None or target.is_red != piece.is_red:
-                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
+                            moves.append(_get_wxf_movement(self._board, pos, (ny, nx), is_red))
         return moves
 
     def _is_in_palace(self, y, x, is_red):
@@ -481,11 +483,11 @@ class ChessGame:
         else:
             return 0 <= y <= 2 and 3 <= x <= 5  # Cung của tướng đen: hàng 0-2, cột 3-5
 
-    def _check_face_to_face(self, pos, moves):
+    def _check_face_to_face(self, pos, moves, is_red):
         """Kiểm tra nước đi đối mặt tướng"""
         y, x = pos
-        king_piece = _Piece('k', self._is_red_active)
-        opponent_king = _Piece('k', not self._is_red_active)
+        king_piece = _Piece('k', is_red)
+        opponent_king = _Piece('k', not is_red)
 
         # Tìm tướng đối phương
         for ny in range(10):
@@ -498,8 +500,25 @@ class ChessGame:
                         face_to_face = False
                         break
                 if face_to_face:
-                    moves.append(_get_wxf_movement(self._board, pos, (ny, x), self._is_red_active))
+                    moves.append(_get_wxf_movement(self._board, pos, (ny, x), is_red))
                 break
+
+    def calculate_opponent_moves(self):
+        raw_moves = []
+        for y in range(10):
+            for x in range(9):
+                piece = self._board[y][x]
+                if piece and piece.is_red != self._is_red_active:
+                    raw_moves += self._get_basic_moves((y, x), piece.kind, not self._is_red_active)
+
+        # Lọc nước đi hợp lệ
+        valid_moves = []
+        for move in raw_moves:
+            temp_board = self._board_after_move(move, not self._is_red_active)
+            if not self.is_in_check(temp_board, not self._is_red_active):
+                valid_moves.append(move)
+
+        return valid_moves
 
     def _recalculate_valid_moves(self):
         raw_moves = []
@@ -507,11 +526,10 @@ class ChessGame:
             for x in range(9):
                 piece = self._board[y][x]
                 if piece and piece.is_red == self._is_red_active:
-                    raw_moves += self._get_basic_moves((y, x), piece.kind)
+                    raw_moves += self._get_basic_moves((y, x), piece.kind, self._is_red_active)
 
         # Lọc nước đi hợp lệ
         valid_moves = []
-
         for move in raw_moves:
             temp_board = self._board_after_move(move, self._is_red_active)
             if not self.is_in_check(temp_board, self._is_red_active):
@@ -1089,7 +1107,6 @@ def piece_count(board):
 
     return pieces_so_far
 
-
 class _Piece:
     def __init__(self, kind, is_red):
         self.kind = kind
@@ -1109,8 +1126,6 @@ if __name__ == '__main__':
     import python_ta
     python_ta.check_all(config={
         'max-line-length': 100,
-        # Note: we ran PyTA against the starter file a2_minichess.py given in Assignment 2,
-        # and disabled the ones that file did not pass either.
         'disable': ['E1136', 'E9989', 'E9998', 'W1401', 'R0201', 'R1702', 'R0912', 'R0913'],
         'extra-imports': ['typing', 'statistics', 'copy']
     })
