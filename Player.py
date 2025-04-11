@@ -60,17 +60,24 @@ class MCTSPlayer(Player):
         self.exploration_weight = exploration_weight
         self.simulate_fn = simulate_fn if simulate_fn else self.default_evaluate_board
         self.move_history = deque(maxlen=50)
+        self.opening_move_index = {'Red': 0, 'Black': 0}
         self.experience_buffer = deque(maxlen=10000)
         self.opening_moves = {
             'Red': [
-                "c2.5", "h2+3", "r1+1", "h8+7", "r9+1",
-                "c8+2", "p3+1", "e3+5", "r9.8", "p7+1",
-                "h2+1", "r1.2"
+                "c2.5",
+                "p3+1",
+                "h2+3",
+                "r1.2",
+                "h8+9",
+                "r2+6",
             ],
             'Black': [
-                "h8+7", "c8.5", "r9+1", "h2+3", "r1+1",
-                "c2+2", "p7+1", "e7+5", "r1.2", "p3+1",
-                "h8+9", "r9.8"
+                "h8+7",
+                "r9+1",
+                "r9.4",
+                "c8-1",
+                "c8.5",
+                "r4+6", 
             ]
         }
 
@@ -107,6 +114,10 @@ class MCTSPlayer(Player):
         # Phạt nếu bị chiếu
         if game.is_in_check(board, game.is_red_move()):
             total_score -= 200
+
+        # Thưởng nếu chiếu được tướng địch
+        if game.is_in_check(board, not game.is_red_move()):
+            total_score += 300
 
         # Thưởng nếu pháo có "ngòi" để tấn công
         for y in range(10):
@@ -157,14 +168,15 @@ class MCTSPlayer(Player):
         if not valid_moves:
             return None
 
-        move_count = len(self.move_history)
-        if move_count < len(self.opening_moves['Red']):
-            side = 'Red' if game.is_red_move() else 'Black'
-            opening_move = self.opening_moves[side][move_count]
+        side = 'Red' if game.is_red_move() else 'Black'
+        if self.opening_move_index[side] < len(self.opening_moves[side]):
+            opening_move = self.opening_moves[side][self.opening_move_index[side]]
             if opening_move in valid_moves:
                 self.move_history.append(opening_move)
+                self.opening_move_index[side] += 1  # Chỉ tăng khi nước đi hợp lệ
                 return opening_move
 
+        # Nếu không còn nước đi khai cuộc hoặc nước đi không hợp lệ, chuyển sang MCTS
         root = MCTSNode(game)
         for _ in range(self.iterations):
             node = root
@@ -212,8 +224,8 @@ class DQNAgent:
 
         self.gamma = 0.99
         self.epsilon = 1.0
-        self.epsilon_min = 0
-        self.epsilon_decay = 0.9999
+        self.epsilon_min = 0.001
+        self.epsilon_decay = 0.995
         self.learning_rate = 0.001
         self.update_targetnn_rate = 100
         self.batch_size = 64
@@ -396,45 +408,45 @@ class DQNAgent:
         return agent
 
 if __name__ == '__main__':    
-    # Khởi tạo và train
-    dqn_agent = DQNAgent()
-    #dqn_agent = DQNAgent.load_full_model("trained_models/chinese_chess_dqn")
-    mcts_player = MCTSPlayer(simulate_fn=dqn_agent)
-    dqn_agent._initialize_buffer()
+    dqn_agent = DQNAgent(state_size=(10, 9, len(PIECES)), action_size=1000)
+    mcts_player = MCTSPlayer(simulate_fn=dqn_agent, iterations=500)
 
-    # Train model (ví dụ đơn giản)
-    for i in range(200):
+    # Nếu muốn tải mô hình đã huấn luyện
+    # dqn_agent = DQNAgent.load_full_model("trained_models/chinese_chess_dqn", training=True)
+    # mcts_player.load_training_data("mcts_experience.npy")
+
+    # Huấn luyện
+    for episode in range(200):
         game = ChessGame()
-        print("Vòng", i + 1)
-        while game.get_winner() is None:
-            move = mcts_player.make_move(game, None)
+        print(f"\n=== Ván {episode + 1} ===")
+        move_count = 0
+        
+        while game.get_winner() is None and move_count < 100:
+            move = mcts_player.make_move(game, game.last_move)
+            if move is None:
+                print("Không còn nước đi hợp lệ!")
+                break
+                
+            print(f"Nước đi: {move}")
             game.make_move(move)
-            game.__str__()
-            dqn_agent.train_main_network()  # Train từ experience buffer
-            print(dqn_agent.epsilon)
-        if i % 10 == 0:
-            dqn_agent.save_model('dqn_model.weights.h5')
-            dqn_agent.save_experience_buffer('dqn_experience.npy')
-            mcts_player.save_training_data('mcts_experience.npy')
-            dqn_agent.save_full_model('trained_models/chinese_chess_dqn')
-        print(game.get_winner())
-    # Sau khi train xong, lưu lại
-    dqn_agent.save_model('dqn_model.weights.h5')
-    dqn_agent.save_experience_buffer('dqn_experience.npy')
-    mcts_player.save_training_data('mcts_experience.npy')
-    dqn_agent.save_full_model('trained_models/chinese_chess_dqn')
+            print(game)
+            
+            # Huấn luyện DQN từ bộ nhớ kinh nghiệm
+            if len(dqn_agent.replay_buffer) >= dqn_agent.batch_size:
+                dqn_agent.train_main_network()
+            
+            move_count += 1
+        
+        winner = game.get_winner()
+        print(f"Kết quả ván {episode + 1}: {winner if winner else 'Chưa có người thắng'}")
+        
+        # Lưu mô hình và bộ nhớ kinh nghiệm sau mỗi 10 ván
+        if (episode + 1) % 10 == 0:
+            dqn_agent.save_full_model(f"trained_models/chinese_chess_dqn_{episode + 1}")
+            mcts_player.save_training_data(f"mcts_experience_{episode + 1}.npy")
+            print(f"Đã lưu mô hình và bộ nhớ kinh nghiệm tại ván {episode + 1}")
 
-    # # Khi muốn sử dụng lại
-    # new_dqn_agent = DQNAgent()
-    # new_dqn_agent.load_model('dqn_model.weights.h5')
-    # new_dqn_agent.load_experience_buffer('dqn_experience.npy')
-    # loaded_agent = DQNAgent.load_full_model('trained_models/chinese_chess_dqn')
-
-    # new_mcts_player = MCTSPlayer(simulate_fn=new_dqn_agent)
-    # new_mcts_player.load_training_data('mcts_experience.npy')
-
-    # game = ChessGame()
-    # while game.get_winner() is None:
-    #     move = mcts_player.make_move(game, None)
-    #     game.make_move(move)
-    #     print(game)  # Hiển thị bàn cờ
+    # Lưu mô hình cuối cùng
+    dqn_agent.save_full_model("trained_models/chinese_chess_dqn_final")
+    mcts_player.save_training_data("mcts_experience_final.npy")
+    print("Đã lưu mô hình và bộ nhớ kinh nghiệm cuối cùng.")
