@@ -1,7 +1,6 @@
 import statistics
 import copy
 
-
 _MAX_MOVES = 200
 
 RED = '\033[91m'
@@ -15,11 +14,10 @@ PIECES = {('r', True): RED + '车' + BLACK, ('r', False): '车',
           ('c', True): RED + '炮' + BLACK, ('c', False): '炮',
           ('p', True): RED + '兵' + BLACK, ('p', False): '卒'}
 
-
 class ChessGame:
-    def __init__(self, board = None, red_active = True, move_count = 0):
+    def __init__(self, board=None, red_active=True, move_count=0):
         if board is not None:
-            self._board = board  
+            self._board = board
         else:
             self._board = [
                 [_Piece('r', False), _Piece('h', False), _Piece('e', False), _Piece('a', False), _Piece('k', False), _Piece('a', False), _Piece('e', False), _Piece('h', False), _Piece('r', False)],
@@ -41,22 +39,23 @@ class ChessGame:
         self.move_history = []  # Thêm lịch sử nước đi
         self.last_move = None   # Lưu nước đi gần nhất
 
-        self._recalculate_valid_moves() 
+        self._recalculate_valid_moves()
+        self.board_history = {}  # Thêm dòng này để lưu trạng thái bàn cờ
 
     def __str__(self):
         print_board(self._board)
         winner = self.get_winner()
 
-        if winner is None: 
+        if winner is None:
             turn_message = ''
             if self._is_red_active:
                 turn_message += "Red's turn.\n"
             else:
                 turn_message += "Black's turn.\n"
             return turn_message + f'Valid moves: {self._valid_moves}'
-        elif winner == 'Draw':  
+        elif winner == 'Draw':
             return 'Draw!'
-        else:  
+        else:
             return f'{winner} wins!'
 
     def get_valid_moves(self):
@@ -70,42 +69,50 @@ class ChessGame:
 
         self._board = self._board_after_move(move_lowered, self._is_red_active)
 
-        self._is_red_active = not self._is_red_active  
-        self._move_count += 1
+        # Lưu trạng thái bàn cờ
+        board_state = tuple(tuple((cell.kind, cell.is_red) if cell else None for cell in row) for row in self._board)
+        self.board_history[board_state] = self.board_history.get(board_state, 0) + 1
 
+        self._is_red_active = not self._is_red_active
+        self._move_count += 1
         self._recalculate_valid_moves()
         self.last_move = move
         self.move_history.append(move)
 
     def copy_and_make_move(self, move):
         new_board = self._board_after_move(move, self._is_red_active)
-        new_game = ChessGame(board=new_board, 
-                            red_active=not self._is_red_active,
-                            move_count=self._move_count + 1)
+        new_game = ChessGame(board=new_board,
+                             red_active=not self._is_red_active,
+                             move_count=self._move_count + 1)
         new_game._valid_moves = []
         return new_game
-    
+
     def is_red_move(self):
         return self._is_red_active
 
+    def is_checkmate(self):
+        if not self.is_in_check(self._board, self._is_red_active):
+            return False
+
+        for move in self._valid_moves:
+            new_game = self.copy_and_make_move(move)
+            if not new_game.is_in_check(new_game._board, self._is_red_active):
+                return False
+        return True
     def is_in_check(self, board, is_red):
-        """Kiểm tra xem tướng của bên is_red có đang bị chiếu không"""
-        # Tìm vị trí của tướng
         king_pos = None
         king_piece = _Piece('k', is_red)
-        
         for y in range(10):
             for x in range(9):
-                if self._board[y][x] == king_piece:
+                if board[y][x] == king_piece:  # Dùng board thay vì self._board
                     king_pos = (y, x)
                     break
             if king_pos is not None:
                 break
-        
+
         if king_pos is None:
-            return False  # Tướng đã bị bắt, không cần kiểm tra chiếu
-        
-        # Kiểm tra xem có quân đối phương nào có thể ăn tướng không
+            return False
+
         for r in range(10):
             for c in range(9):
                 piece = board[r][c]
@@ -113,32 +120,21 @@ class ChessGame:
                     if self._can_piece_capture_king(board, (r, c), king_pos, piece.kind):
                         return True
         return False
-            
-        
-        return False
-
-    def is_checkmate(self):
-        """Kiểm tra xem có chiếu bí không"""
-        if not self.is_in_check(self._board, self._is_red_active):
-            return False
-        
-        # Kiểm tra xem có nước đi hợp lệ nào không
-        for move in self._valid_moves:
-            new_game = self.copy_and_make_move(move)
-            if not new_game.is_in_check(self._board, self._is_red_active):
-                return False
-        
-        return True
 
     def is_stalemate(self):
         """Kiểm tra xem có hết nước đi (stalemate) không"""
         if self.is_in_check(self._board, self._is_red_active):
             return False
-        
+
         # Kiểm tra xem có nước đi hợp lệ nào không
         return len(self._valid_moves) == 0
 
     def get_winner(self):
+        # Kiểm tra lặp lại trạng thái
+        board_state = tuple(tuple((cell.kind, cell.is_red) if cell else None for cell in row) for row in self._board)
+        if self.board_history.get(board_state, 0) >= 3:
+            return 'Draw'  # Hòa do lặp lại 3 lần
+
         if self._move_count >= _MAX_MOVES:
             return 'Draw'
         elif all(self._board[y][x] != _Piece('k', True)
@@ -153,14 +149,13 @@ class ChessGame:
             return 'Draw'
         else:
             return None
-
     def _calculate_moves_for_board(self, board, is_red_active):
-        moves = []  
+        moves = []
 
-        for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]: 
+        for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]:
             piece = board[pos[0]][pos[1]]
             if piece is None or piece.is_red != is_red_active:
-                continue  
+                continue
 
             if piece.kind == 'r':
                 moves += self._calculate_moves_for_chariot(board, pos)
@@ -174,14 +169,15 @@ class ChessGame:
                 moves += self._calculate_moves_for_king(board, pos)
             elif piece.kind == 'c':
                 moves += self._calculate_moves_for_cannon(board, pos)
-            else:  
+            else:
                 moves += self._calculate_moves_for_pawn(board, pos)
 
         return moves
 
     def _calculate_moves_for_chariot(self, board, pos):
         piece = board[pos[0]][pos[1]]
-        moves = []  
+        moves = []
+
         moves += self._find_moves_in_direction(board, pos, piece.is_red, (1, 0))
         moves += self._find_moves_in_direction(board, pos, piece.is_red, (-1, 0))
         moves += self._find_moves_in_direction(board, pos, piece.is_red, (0, 1))
@@ -301,7 +297,7 @@ class ChessGame:
 
         return moves
 
-    def _find_moves_in_direction(self, board, pos, is_red, direction, limit = None, capture = None):
+    def _find_moves_in_direction(self, board, pos, is_red, direction, limit=None, capture=None):
         moves = []
         kind = board[pos[0]][pos[1]].kind
         stop = False
@@ -365,7 +361,7 @@ class ChessGame:
         y, x = pos
         moves = []
         piece = self._board[y][x]
-        
+
         if piece_kind == 'r':  # Xe
             for dy, dx in [(1,0), (-1,0), (0,1), (0,-1)]:
                 for i in range(1, 10):
@@ -377,7 +373,7 @@ class ChessGame:
                         moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
                     if target is not None:
                         break
-                            
+
         elif piece_kind == 'h':  # Mã
             horse_moves = [
                 (-2,-1), (-2,1), (-1,-2), (-1,2),
@@ -393,7 +389,7 @@ class ChessGame:
                     target = self._board[ny][nx]
                     if target is None or target.is_red != piece.is_red:
                         moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
-            
+
         elif piece_kind == 'e':  # Tượng
             for dy, dx in [(-2,-2), (-2,2), (2,-2), (2,2)]:
                 ny, nx = y + dy, x + dx
@@ -403,7 +399,7 @@ class ChessGame:
                             target = self._board[ny][nx]
                             if target is None or target.is_red != self._is_red_active:
                                 moves.append(_get_wxf_movement(self._board, pos, (ny, nx), self._is_red_active))
-            
+
         elif piece_kind == 'a':  # Sĩ
             advisor_moves = [(-1,-1), (-1,1), (1,-1), (1,1)]
             for dy, dx in advisor_moves:
@@ -480,18 +476,17 @@ class ChessGame:
         return moves
 
     def _is_in_palace(self, y, x, is_red):
-        """Kiểm tra vị trí có trong cung không"""
         if is_red:
-            return 0 <= y <= 2 and 3 <= x <= 5
+            return 7 <= y <= 9 and 3 <= x <= 5  # Cung của tướng đỏ: hàng 7-9, cột 3-5
         else:
-            return 7 <= y <= 9 and 3 <= x <= 5
+            return 0 <= y <= 2 and 3 <= x <= 5  # Cung của tướng đen: hàng 0-2, cột 3-5
 
     def _check_face_to_face(self, pos, moves):
         """Kiểm tra nước đi đối mặt tướng"""
         y, x = pos
         king_piece = _Piece('k', self._is_red_active)
         opponent_king = _Piece('k', not self._is_red_active)
-        
+
         # Tìm tướng đối phương
         for ny in range(10):
             if self._board[ny][x] == opponent_king:
@@ -513,15 +508,15 @@ class ChessGame:
                 piece = self._board[y][x]
                 if piece and piece.is_red == self._is_red_active:
                     raw_moves += self._get_basic_moves((y, x), piece.kind)
-        
-        #Lọc nước đi hợp lệ
+
+        # Lọc nước đi hợp lệ
         valid_moves = []
-        
+
         for move in raw_moves:
             temp_board = self._board_after_move(move, self._is_red_active)
             if not self.is_in_check(temp_board, self._is_red_active):
                 valid_moves.append(move)
-        
+
         self._valid_moves = valid_moves
 
     def _can_piece_capture_king(self, board, piece_pos, king_pos, piece_kind):
@@ -570,13 +565,13 @@ class ChessGame:
         """Kiểm tra mã có thể bắt tướng."""
         horse_y, horse_x = horse_pos
         king_y, king_x = king_pos
-        
+
         # 8 vị trí mã có thể nhảy
         moves = [
             (-2, -1), (-2, 1), (-1, -2), (-1, 2),
             (1, -2), (1, 2), (2, -1), (2, 1)
         ]
-        
+
         for dy, dx in moves:
             new_y, new_x = horse_y + dy, horse_x + dx
             if (new_y, new_x) == king_pos:
@@ -595,7 +590,7 @@ class ChessGame:
         """Kiểm tra tượng có thể bắt tướng."""
         elephant_y, elephant_x = elephant_pos
         king_y, king_x = king_pos
-        
+
         # Tượng chỉ đi chéo 2 ô
         if abs(elephant_y - king_y) == 2 and abs(elephant_x - king_x) == 2:
             # Kiểm tra chân tượng (ô giữa)
@@ -611,7 +606,7 @@ class ChessGame:
         """Kiểm tra sĩ có thể bắt tướng."""
         advisor_y, advisor_x = advisor_pos
         king_y, king_x = king_pos
-        
+
         # Sĩ chỉ đi chéo 1 ô trong cung
         if abs(advisor_y - king_y) == 1 and abs(advisor_x - king_x) == 1:
             # Kiểm tra vẫn ở trong cung
@@ -625,7 +620,7 @@ class ChessGame:
         """Kiểm tra tướng có thể bắt tướng đối phương (đối diện)."""
         king_y, king_x = king_pos
         other_y, other_x = other_king_pos
-        
+
         # Hai tướng phải cùng cột và không có quân cản
         if king_x == other_x:
             step = 1 if other_y > king_y else -1
@@ -641,12 +636,12 @@ class ChessGame:
         """Kiểm tra pháo có thể bắt tướng."""
         cannon_y, cannon_x = cannon_pos
         king_y, king_x = king_pos
-        
+
         if cannon_y != king_y and cannon_x != king_x:
             return False
-        
+
         count = 0  # Đếm số quân cản
-        
+
         if cannon_y == king_y:  # Cùng hàng
             step = 1 if king_x > cannon_x else -1
             current_x = cannon_x + step
@@ -661,7 +656,7 @@ class ChessGame:
                 if board[current_y][cannon_x] is not None:
                     count += 1
                 current_y += step
-        
+
         # Pháo cần đúng 1 quân cản (ngòi)
         return count == 1
 
@@ -669,20 +664,19 @@ class ChessGame:
         """Kiểm tra tốt có thể bắt tướng."""
         pawn_y, pawn_x = pawn_pos
         king_y, king_x = king_pos
-        
+
         # Tốt đi thẳng, khi qua sông có thể đi ngang
         if board[pawn_y][pawn_x].is_red:  # Tốt đỏ
             # Đi lên (đối với tốt đỏ)
             if (pawn_y - 1 == king_y and pawn_x == king_x) or \
-            (pawn_y <= 4 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
+               (pawn_y <= 4 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
                 return True
         else:  # Tốt đen
             # Đi xuống (đối với tốt đen)
             if (pawn_y + 1 == king_y and pawn_x == king_x) or \
-            (pawn_y >= 5 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
+               (pawn_y >= 5 and pawn_y == king_y and abs(pawn_x - king_x) == 1):
                 return True
         return False
-
 
 def print_board(board):
     row_normal = '丨    丨    丨    丨    丨    丨    丨    丨    丨'
@@ -710,14 +704,12 @@ def print_board(board):
           f'{_print_row(board, 9)}\n'
           '九    八    七    六    五    四    三    二    一    (Red)\n')
 
-
 def _print_row(board, row):
     str_so_far = ''
     for i in range(0, 8):
         str_so_far += f'{_print_piece(board, row, i)}----'
     str_so_far += f'{_print_piece(board, row, 8)}'
     return str_so_far
-
 
 def _print_piece(board, y, x):
     piece = board[y][x]
@@ -730,7 +722,6 @@ def _print_piece(board, y, x):
             return '一'
         else:
             return '十'
-
 
 def _get_index_movement(board, move, is_red):
     y, x = _wxf_to_index(board, move[0:2], is_red)
@@ -773,7 +764,6 @@ def _get_index_movement(board, move, is_red):
         else:  # sign == '-' and not is_red
             return (y - vert, value - 1)
 
-
 def _get_wxf_movement(board, start, end, is_red):
     move_start = _index_to_wxf(board, start, is_red)
 
@@ -797,7 +787,6 @@ def _get_wxf_movement(board, start, end, is_red):
             return move_start + '+' + move_end
         else:
             return move_start + '-' + move_end
-
 
 def _wxf_to_index(board, piece, is_red):
     piece_lower = piece.lower()
@@ -828,7 +817,6 @@ def _wxf_to_index(board, piece, is_red):
             raise ValueError('Invalid piece')
         else:
             return (y, x)
-
 
 def _wxf_to_index_two_aligned(board, piece, is_red):
     piece_lower = piece.lower()
@@ -866,7 +854,6 @@ def _wxf_to_index_two_aligned(board, piece, is_red):
     else:
         return coord2
 
-
 def _wxf_to_index_more_than_three_aligned(board, piece, is_red):
     piece_lower = piece.lower()
     piece_type = piece_lower[0]
@@ -885,7 +872,7 @@ def _wxf_to_index_more_than_three_aligned(board, piece, is_red):
         print_board(board)
         print(piece)
         raise ValueError('Invalid piece - no pawns found')
-    
+
     x_counts = {}
     for y, x in locations_so_far:
         x_counts[x] = x_counts.get(x, 0) + 1
@@ -909,7 +896,6 @@ def _wxf_to_index_more_than_three_aligned(board, piece, is_red):
     else:
         return aligned_pieces[-int(piece_type)]
 
-
 def _index_to_wxf(board, pos, is_red):
     piece = board[pos[0]][pos[1]]
     if piece is None or piece.is_red != is_red:
@@ -932,7 +918,7 @@ def _index_to_wxf(board, pos, is_red):
             return piece_type + str(x + 1)
     elif len(pieces) == 2:
         if (is_red and pieces.index((pos[0], pos[1])) == 1) \
-                or (not is_red and pieces.index((pos[0], pos[1])) == 0):
+           or (not is_red and pieces.index((pos[0], pos[1])) == 0):
             return piece_type + '-'
         else:
             return piece_type + '+'
@@ -941,7 +927,6 @@ def _index_to_wxf(board, pos, is_red):
             return str(pieces.index((pos[0], pos[1])) + 1) + str(9 - x)
         else:
             return str(len(pieces) - pieces.index((pos[0], pos[1]))) + str(x + 1)
-
 
 def calculate_absolute_points(board):
     points_so_far = 0
@@ -966,7 +951,6 @@ def calculate_absolute_points(board):
                 points_so_far += _absolute_advisor(board, pos)
     return points_so_far
 
-
 def _absolute_pawn(board, pos):
     points_so_far = 0
     piece = board[pos[0]][pos[1]]
@@ -981,7 +965,6 @@ def _absolute_pawn(board, pos):
         points_so_far += 100 * side
 
     return points_so_far
-
 
 def _absolute_horse(board, pos):
     piece = board[pos[0]][pos[1]]
@@ -1004,7 +987,6 @@ def _absolute_horse(board, pos):
 
     return points_so_far
 
-
 def _absolute_elephant(board, pos):
     piece = board[pos[0]][pos[1]]
     if piece.is_red:
@@ -1025,7 +1007,6 @@ def _absolute_elephant(board, pos):
         points_so_far += 10
 
     return points_so_far
-
 
 def _absolute_cannon(board, pos):
     piece = board[pos[0]][pos[1]]
@@ -1048,7 +1029,6 @@ def _absolute_cannon(board, pos):
 
     return points_so_far
 
-
 def _absolute_king(board, pos):
     piece = board[pos[0]][pos[1]]
     if piece.is_red:
@@ -1069,7 +1049,6 @@ def _absolute_king(board, pos):
         points_so_far -= 500 * side
     return points_so_far
 
-
 def _absolute_chariot(board, pos):
     piece = board[pos[0]][pos[1]]
     if piece.is_red:
@@ -1085,7 +1064,6 @@ def _absolute_chariot(board, pos):
         points_so_far += 10
 
     return points_so_far
-
 
 def _absolute_advisor(board, pos):
     piece = board[pos[0]][pos[1]]
@@ -1103,7 +1081,6 @@ def _absolute_advisor(board, pos):
 
     return points_so_far
 
-
 def piece_count(board):
     pieces_so_far = 0
     for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]:
@@ -1111,6 +1088,7 @@ def piece_count(board):
             pieces_so_far += 1
 
     return pieces_so_far
+
 
 class _Piece:
     def __init__(self, kind, is_red):
@@ -1122,19 +1100,19 @@ class _Piece:
             return False
         return self.kind == other.kind and self.is_red == other.is_red
 
+    def __hash__(self):
+        return hash((self.kind, self.is_red))
 
 if __name__ == '__main__':
-    # import python_ta.contracts
-    # python_ta.contracts.check_all_contracts()
-
-    # import python_ta
-    # python_ta.check_all(config={
-    #     'max-line-length': 100,
-    #     # Note: we ran PyTA against the starter file a2_minichess.py given in Assignment 2,
-    #     # and disabled the ones that file did not pass either.
-    #     'disable': ['E1136', 'E9989', 'E9998', 'W1401', 'R0201', 'R1702', 'R0912', 'R0913'],
-    #     'extra-imports': ['typing', 'statistics', 'copy']
-    # })
-
+    import python_ta.contracts
+    python_ta.contracts.check_all_contracts()
+    import python_ta
+    python_ta.check_all(config={
+        'max-line-length': 100,
+        # Note: we ran PyTA against the starter file a2_minichess.py given in Assignment 2,
+        # and disabled the ones that file did not pass either.
+        'disable': ['E1136', 'E9989', 'E9998', 'W1401', 'R0201', 'R1702', 'R0912', 'R0913'],
+        'extra-imports': ['typing', 'statistics', 'copy']
+    })
     import doctest
     doctest.testmod()
