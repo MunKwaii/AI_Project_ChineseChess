@@ -14,7 +14,7 @@ class ChineseChessApp:
         
         # Load MCTS player
         self.dqn_agent = DQNAgent()
-        model_path = "trained_models/chinese_chess_dqn_30"
+        model_path = "trained_models/chinese_chess_dqn"
         if os.path.exists(model_path):
             self.dqn_agent.main_network.load_weights(model_path)
             print(f"Loaded DQN model from {model_path}")
