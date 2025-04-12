@@ -88,24 +88,7 @@ class MCTSPlayer:
     def default_evaluate_board(self, game):
         board = game.get_board()
         is_red = game.is_red_move()
-        side_modifier = 1 if is_red else -1
-
         total_score = calculate_absolute_points(board)
-        if game.is_in_check(board, is_red):
-            total_score += (-200) * side_modifier
-        if game.is_in_check(board, not is_red):
-            total_score += 300 * side_modifier
-        current_move = self.move_history[-1] if self.move_history else None
-        if current_move and list(self.move_history).count(current_move) >= 2:
-            total_score += (-300) * side_modifier
-        for y in range(10):
-            for x in range(9):
-                piece = board[y][x]
-                if piece and piece.is_red == is_red and piece.kind in {'r', 'c'}:
-                    if piece.is_red and y <= 2:
-                        total_score += 100 * side_modifier
-                    elif not piece.is_red and y >= 7:
-                        total_score += 100 * side_modifier
         return min(max(total_score / 10000, -1), 1)
 
     def simulate_node(self, root):

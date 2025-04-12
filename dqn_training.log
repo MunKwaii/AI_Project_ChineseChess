@@ -765,3 +765,20 @@
 2025-04-12 16:43:25,525 - INFO - Move time: 4.0476 seconds for move a5-4
 2025-04-12 16:43:29,811 - INFO - Move time: 3.1319 seconds for move k6+1
 2025-04-12 16:43:39,305 - INFO - Move time: 3.3892 seconds for move r9.2
+2025-04-12 16:46:05,219 - INFO - Loaded pre-trained model successfully
+2025-04-12 16:46:05,221 - INFO - 
+=== Starting Episode 31 ===
+2025-04-12 16:46:16,480 - INFO - Move time: 11.2525 seconds for move c8+7
+2025-04-12 16:46:16,504 - INFO - Move: c8+7 | Reward: 0.0430
+2025-04-12 16:46:16,504 - DEBUG - Starting training of main network
+2025-04-12 16:46:16,664 - WARNING - 5 out of the last 501 calls to <function TensorFlowTrainer.make_predict_function.<locals>.one_step_on_data_distributed at 0x000001A22DA053A0> triggered tf.function retracing. Tracing is expensive and the excessive number of tracings could be due to (1) creating @tf.function repeatedly in a loop, (2) passing tensors with different shapes, (3) passing Python objects instead of tensors. For (1), please define your @tf.function outside of the loop. For (2), @tf.function has reduce_retracing=True option that can avoid unnecessary retracing. For (3), please refer to https://www.tensorflow.org/guide/function#controlling_retracing and https://www.tensorflow.org/api_docs/python/tf/function for  more details.
+2025-04-12 16:46:17,531 - DEBUG - Finished training batch
+2025-04-12 16:46:17,531 - DEBUG - Updated target network weights
+2025-04-12 16:46:28,159 - INFO - Move time: 10.6222 seconds for move r1.2
+2025-04-12 16:46:28,179 - INFO - Move: r1.2 | Reward: -0.0060
+2025-04-12 16:46:28,179 - DEBUG - Starting training of main network
+2025-04-12 16:46:28,486 - DEBUG - Finished training batch
+2025-04-12 16:46:39,790 - INFO - Move time: 11.3082 seconds for move c2+7
+2025-04-12 16:46:39,811 - INFO - Move: c2+7 | Reward: 0.0370
+2025-04-12 16:46:39,811 - DEBUG - Starting training of main network
+2025-04-12 16:46:40,117 - DEBUG - Finished training batch
