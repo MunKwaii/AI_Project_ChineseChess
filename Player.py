@@ -1,6 +1,6 @@
 import random
 import math
-from Chinese_Chess_Game_Rules import ChessGame, PIECES, calculate_absolute_points, _Piece, _get_index_movement
+from Chinese_Chess_Game_Rules import ChessGame, PIECES, calculate_absolute_points, _Piece, _get_index_movement, piece_count
 import numpy as np
 from collections import deque
 import tensorflow as tf
@@ -9,7 +9,16 @@ from keras.layers import Dense, Conv2D, Flatten
 from keras.optimizers import Adam
 import json
 import os
+import logging
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('dqn_training.log', mode='a'),  # Ghi vào tệp
+        logging.StreamHandler()  # In ra console
+    ]
+)
 # Lớp MCTSNode
 class MCTSNode:
     def __init__(self, game, move=None, parent=None):
@@ -41,7 +50,7 @@ class MCTSNode:
 
 # Lớp MCTSPlayer tích hợp DQN
 class MCTSPlayer:
-    def __init__(self, dqn_agent, iterations=1000, exploration_weight=1.0):
+    def __init__(self, dqn_agent, iterations=1000, exploration_weight=2.0):
         self.dqn_agent = dqn_agent  # Sử dụng DQNAgent thay vì simulate_fn riêng
         self.iterations = iterations
         self.exploration_weight = exploration_weight
@@ -84,12 +93,12 @@ class MCTSPlayer:
         #             total_score += bonus * side_modifier
 
         # Phạt nếu bị chiếu
-        # if game.is_in_check(board, is_red):
-        #     total_score += (-200) * side_modifier
+        if game.is_in_check(board, is_red):
+            total_score += (-200) * side_modifier
 
-        # # Thưởng nếu chiếu tướng địch
-        # if game.is_in_check(board, not is_red):
-        #     total_score += 300 * side_modifier
+        # Thưởng nếu chiếu tướng địch
+        if game.is_in_check(board, not is_red):
+            total_score += 300 * side_modifier
 
         # # Thưởng nếu pháo có ngòi
         # for y in range(10):
@@ -111,17 +120,17 @@ class MCTSPlayer:
         # Phạt lặp nước đi
         current_move = self.move_history[-1] if self.move_history else None
         if current_move and list(self.move_history).count(current_move) >= 2:
-            total_score += (-100) * side_modifier
+            total_score += (-300) * side_modifier
 
-        # # Thưởng xe/pháo gần cung địch
-        # for y in range(10):
-        #     for x in range(9):
-        #         piece = board[y][x]
-        #         if piece and piece.is_red == is_red and piece.kind in {'r', 'c'}:
-        #             if piece.is_red and y <= 2:
-        #                 total_score += 100 * side_modifier
-        #             elif not piece.is_red and y >= 7:
-        #                 total_score += 100 * side_modifier
+        # Thưởng xe/pháo gần cung địch
+        for y in range(10):
+            for x in range(9):
+                piece = board[y][x]
+                if piece and piece.is_red == is_red and piece.kind in {'r', 'c'}:
+                    if piece.is_red and y <= 2:
+                        total_score += 100 * side_modifier
+                    elif not piece.is_red and y >= 7:
+                        total_score += 100 * side_modifier
 
         # # Thưởng cơ hội ăn quân
         # for move in game.get_valid_moves():
@@ -156,13 +165,13 @@ class MCTSPlayer:
         if not valid_moves:
             return None
 
-        side = 'Red' if game.is_red_move() else 'Black'
-        if self.opening_move_index[side] < len(self.opening_moves[side]):
-            opening_move = self.opening_moves[side][self.opening_move_index[side]]
-            if opening_move in valid_moves:
-                self.move_history.append(opening_move)
-                self.opening_move_index[side] += 1
-                return opening_move
+        # side = 'Red' if game.is_red_move() else 'Black'
+        # if self.opening_move_index[side] < len(self.opening_moves[side]):
+        #     opening_move = self.opening_moves[side][self.opening_move_index[side]]
+        #     if opening_move in valid_moves:
+        #         self.move_history.append(opening_move)
+        #         self.opening_move_index[side] += 1
+        #         return opening_move
 
         # Chuyển sang MCTS nếu hết khai cuộc
         root = MCTSNode(game)
@@ -204,7 +213,7 @@ class DQNAgent:
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.98
+        self.epsilon_decay = 0.995
         self.learning_rate = 0.001
         self.update_targetnn_rate = 10
         self.batch_size = 64
@@ -253,10 +262,18 @@ class DQNAgent:
 
     def train_main_network(self, batch_size):
         if len(self.replay_buffer) < batch_size:
+            logging.info(f"Not enough samples in replay buffer: {len(self.replay_buffer)}/{batch_size}")
             return
+        logging.debug("Starting training of main network")
         state_batch, action_batch, reward_batch, next_state_batch, terminal_batch = self.get_batch_from_buffer(batch_size)
         q_values = self.main_network.predict(state_batch, verbose=0)
         next_q_values = self.target_network.predict(next_state_batch, verbose=0)
+
+        logging.debug("Target network Q-values for next states:")
+        for i in range(batch_size):
+            logging.debug(f"Sample {i}: Q-values = {next_q_values[i][:10]}... (showing first 10 actions)")
+            logging.debug(f"Sample {i}: Max Q-value = {np.max(next_q_values[i]):.4f}, Action index = {np.argmax(next_q_values[i])}")
+
         max_next_q = np.amax(next_q_values, axis=1)
 
         for i in range(batch_size):
@@ -264,6 +281,7 @@ class DQNAgent:
             q_values[i][action_batch[i]] = new_q_values
 
         self.main_network.fit(state_batch, q_values, verbose=0)
+        logging.debug("Finished training batch")
 
     def make_decision(self, state, valid_moves):
         if random.uniform(0, 1) < self.epsilon:
@@ -317,7 +335,6 @@ class DQNAgent:
 
 # Chương trình chính
 if __name__ == "__main__":
-    # Khởi tạo game và tham số
     env = ChessGame()
     state_size = (10, 9, len(PIECES))
     action_size = 200
@@ -326,15 +343,21 @@ if __name__ == "__main__":
     batch_size = 64
 
     # Khởi tạo agent
-    dqn_agent = DQNAgent(state_size=state_size, action_size=action_size)
+    dqn_agent = DQNAgent(state_size=state_size, action_size=200)
+    try:
+        dqn_agent.load("trained_models/chinese_chess_dqn_30")
+        logging.info("Loaded pre-trained model successfully")
+    except Exception as e:
+        logging.warning(f"Failed to load model: {e}. Using untrained model.")
+    
     mcts_player = MCTSPlayer(dqn_agent=dqn_agent, iterations=500)
 
-    for ep in range(n_episodes):
+    for ep in range(30, n_episodes):
         ep_rewards = 0
         env = ChessGame()  # Reset môi trường
         mcts_player.reset_opening()
         state = dqn_agent.board_to_tensor(env)
-        print(f"\n=== Ván {ep + 1} ===")
+        logging.info(f"\n=== Starting Episode {ep + 1} ===")
 
         for t in range(n_timesteps):
             dqn_agent.total_time_step += 1
@@ -342,11 +365,12 @@ if __name__ == "__main__":
             # Cập nhật target network
             if dqn_agent.total_time_step % dqn_agent.update_targetnn_rate == 0:
                 dqn_agent.target_network.set_weights(dqn_agent.main_network.get_weights())
+                logging.debug("Updated target network weights")
 
             # Chọn nước đi bằng MCTS
             action = mcts_player.make_move(env, env.last_move)
             if action is None:
-                print("Không còn nước đi hợp lệ!")
+                logging.info("No valid moves available!")
                 break
 
             # Thực hiện nước đi
@@ -363,11 +387,11 @@ if __name__ == "__main__":
             state = next_state
             ep_rewards += reward
 
-            print(f"Nước đi: {action} | Điểm: {reward:.4f}")
+            logging.info(f"Move: {action} | Reward: {reward:.4f}")
 
             if terminal:
                 winner = env.get_winner()
-                print(f"Ván {ep + 1} kết thúc với người thắng: {winner}, Tổng điểm: {ep_rewards:.4f}")
+                logging.info(f"Episode {ep + 1} ended with winner: {winner}, Total reward: {ep_rewards:.4f}")
                 break
 
             # Huấn luyện DQN nếu đủ dữ liệu
@@ -377,14 +401,16 @@ if __name__ == "__main__":
         # Giảm epsilon sau mỗi episode
         if dqn_agent.epsilon > dqn_agent.epsilon_min:
             dqn_agent.epsilon *= dqn_agent.epsilon_decay
+            logging.debug(f"Updated epsilon: {dqn_agent.epsilon:.4f}")
 
         # In kết quả nếu không kết thúc sớm
         if not terminal:
-            print(f"Ván {ep + 1} đạt {t + 1} nước đi, Tổng điểm: {ep_rewards:.4f}")
+            logging.info(f"Episode {ep + 1} reached {t + 1} moves, Total reward: {ep_rewards:.4f}")
         
         if (ep + 1) % 10 == 0:
             dqn_agent.save(f"trained_models/chinese_chess_dqn_{ep + 1}")
+            logging.info(f"Saved model at episode {ep + 1}")
 
     # Lưu mô hình sau khi huấn luyện
     dqn_agent.main_network.save("trained_models/chinese_chess_dqn_final")
-    print("Đã lưu mô hình cuối cùng.")
+    logging.info("Saved final model.")

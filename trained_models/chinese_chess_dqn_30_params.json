@@ -1,0 +1,1 @@
+{"gamma": 0.99, "epsilon": 0.8603841919146962, "epsilon_min": 0.01, "epsilon_decay": 0.995, "learning_rate": 0.001, "batch_size": 64, "update_targetnn_rate": 10, "total_time_step": 1708}

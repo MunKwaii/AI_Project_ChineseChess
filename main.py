@@ -13,9 +13,12 @@ class ChineseChessApp:
         self.root.geometry("600x500")
         
         # Load MCTS player
-        self.loaded_agent = DQNAgent.load_full_model("trained_models/chinese_chess_dqn")
-        self.player = MCTSPlayer(iterations=100, simulate_fn=self.loaded_agent)
-        
+        self.dqn_agent = DQNAgent()
+        model_path = "trained_models/chinese_chess_dqn_30"
+        if os.path.exists(model_path):
+            self.dqn_agent.main_network.load_weights(model_path)
+            print(f"Loaded DQN model from {model_path}")
+        self.player = MCTSPlayer(dqn_agent=self.dqn_agent, iterations=100)
         # Sound states
         self.bgm_enabled = True
         self.sfx_enabled = True
