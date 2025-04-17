@@ -12,7 +12,7 @@ import copy
 import logging
 
 # Giả sử Chinese_Chess_Game_Rules.py đã được cung cấp
-from Chinese_Chess_Game_Rules import ChessGame, PIECES, _Piece, _get_index_movement
+from Chinese_Chess_Game_Rules import ChessGame, PIECES, _Piece
 
 logging.basicConfig(
     level=logging.INFO,
@@ -268,12 +268,12 @@ class DQNAgent:
         logging.debug("Starting training of main network")
         state_batch, action_batch, reward_batch, next_state_batch, terminal_batch = self.get_batch_from_buffer(batch_size)
 
-        self.main_network.train()
+        self.main_network.train() #bo viet lai
         if dqn_agent.epsilon > dqn_agent.epsilon_min:dqn_agent.epsilon *= dqn_agent.epsilon_decay
         self.update_targetnn_rate-=1 #le
-        if self.update_targetnn_rate==0:
+        if self.update_targetnn_rate == 0:
             self.target_network.load_state_dict(self.main_network.state_dict())
-            self.update_targetnn_rate==10
+            self.update_targetnn_rate = 10
         state_batch = state_batch.to(self.device)
         state_batch = state_batch.permute(0, 3, 1, 2)
         action_batch = action_batch.to(self.device)
@@ -281,10 +281,6 @@ class DQNAgent:
         next_state_batch = next_state_batch.to(self.device)
         next_state_batch = next_state_batch.permute(0, 3, 1, 2)
         terminal_batch = terminal_batch.to(self.device)
-
-        def predict_batch(states):
-            with torch.no_grad():
-                return self.main_network(states)
 
         def predict_target_batch(states):
             with torch.no_grad():
@@ -361,7 +357,7 @@ if __name__ == "__main__":
     state_size = (10, 9, len(PIECES))
     action_size = 200
     n_timesteps = 500
-    batch_size = 64
+    batch_size = 64  #lam sao cho len 1024
 
     dqn_agent = DQNAgent(state_size=state_size, action_size=200)
     
@@ -396,6 +392,8 @@ if __name__ == "__main__":
                 next_state = dqn_agent.board_to_tensor(env)
                 reward = 0.0  # Khởi tạo reward, không dùng default_evaluate_board, chỉ phạt mất quân
                 board = env.get_board()
+
+                #reward 
                 red_cannons = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'cannon' and board[y][x].is_red)
                 red_rooks = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'rook' and board[y][x].is_red)
                 black_cannons = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'cannon' and not board[y][x].is_red)
