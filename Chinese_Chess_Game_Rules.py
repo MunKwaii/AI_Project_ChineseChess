@@ -1,7 +1,8 @@
+#Chinese_Chess_Game_Rules.py
 import statistics
 import copy
 
-_MAX_MOVES = 200
+_MAX_MOVES = 500
 
 RED = '\033[91m'
 BLACK = '\33[0m'
