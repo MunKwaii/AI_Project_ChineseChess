@@ -1,21 +1,21 @@
 import random
 import math
-from Chinese_Chess_Game_Rules import ChessGame, PIECES, calculate_absolute_points, _Piece, _get_index_movement, piece_count
-import numpy as np
-from collections import deque
-import tensorflow as tf
-from keras.models import Sequential
-from keras.layers import Dense, Conv2D, Flatten
-from keras.optimizers import Adam
-import json
 import os
-import logging
+from collections import deque
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from concurrent.futures import ThreadPoolExecutor
 import threading
-import time  # Thêm import time để đo thời gian
+import time
+import copy
+import logging
+
+# Giả sử Chinese_Chess_Game_Rules.py đã được cung cấp
+from Chinese_Chess_Game_Rules import ChessGame, PIECES, _Piece, _get_index_movement
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('dqn_training.log', mode='a'),
@@ -35,18 +35,23 @@ class MCTSNode:
         self.prior = 1.0
         self.lock = threading.Lock()
 
-    def ucb1(self, exploration_weight=1.0):
+    def ucb1(self, exploration_weight=1.5):
         with self.lock:
             if self.visits == 0:
                 return float('inf')
-            return (self.value / self.visits) + exploration_weight * math.sqrt(math.log(self.parent.visits) / self.visits)
+            return (self.value / self.visits) + exploration_weight * math.sqrt(math.log(self.parent.visits + 1) / (self.visits + 1))
 
     def expand(self):
         valid_moves = self.game.get_valid_moves()
+        if not valid_moves:
+            logging.debug("No valid moves to expand")
+            return None
         for move in valid_moves:
             new_game = self.game.copy_and_make_move(move)
+            new_game.board_history = {}
             self.children.append(MCTSNode(new_game, move, self))
-        return self.children[0] if self.children else None
+        logging.debug(f"Expanded node with {len(self.children)} children")
+        return random.choice(self.children) if self.children else None
 
     def backpropagate(self, value):
         with self.lock:
@@ -57,7 +62,7 @@ class MCTSNode:
 
 # Lớp MCTSPlayer
 class MCTSPlayer:
-    def __init__(self, dqn_agent, iterations=1000, exploration_weight=2.0, max_workers=15):
+    def __init__(self, dqn_agent, iterations=1000, exploration_weight=1.5, max_workers=6):
         self.dqn_agent = dqn_agent
         self.iterations = iterations
         self.exploration_weight = exploration_weight
@@ -75,7 +80,7 @@ class MCTSPlayer:
 
     def board_to_tensor(self, game):
         board = game.get_board()
-        tensor = np.zeros((10, 9, len(PIECES)), dtype=np.float32)
+        tensor = torch.zeros((10, 9, len(PIECES)), dtype=torch.float32)
         for r in range(10):
             for c in range(9):
                 piece = board[r][c]
@@ -85,57 +90,103 @@ class MCTSPlayer:
                         tensor[r, c, list(PIECES.keys()).index(key)] = 1
         return tensor
 
-    def default_evaluate_board(self, game):
-        board = game.get_board()
-        is_red = game.is_red_move()
-        total_score = calculate_absolute_points(board)
-        return min(max(total_score / 10000, -1), 1)
+    def random_rollout(self, game, max_depth=15):
+        current_game = copy.deepcopy(game)
+        current_game.board_history = {}
+        depth = 0
+        while depth < max_depth and current_game.get_valid_moves():
+            valid_moves = current_game.get_valid_moves()
+            if not valid_moves:
+                logging.debug("No valid moves in rollout")
+                break
+            move = random.choice(valid_moves)
+            current_game = current_game.copy_and_make_move(move)
+            current_game.board_history = {}
+            depth += 1
+        winner = current_game.get_winner()
+        if winner is not None:
+            if winner == 'Red' and current_game.is_red_move() or winner == 'Black' and not current_game.is_red_move():
+                return 1.0
+            elif winner == 'Draw':
+                return 0.0
+            else:
+                return -1.0
+        return 0.0
 
     def simulate_node(self, root):
         node = root
-        while node.children and node.game.get_winner() is None:
+        depth = 0
+        max_depth = 50
+        path = [node.move] if node.move else ["root"]
+        logging.debug(f"Starting simulation from node with move: {node.move}")
+
+        while node.children and depth < max_depth and node.game.get_valid_moves():
             node = max(node.children, key=lambda c: c.ucb1(self.exploration_weight))
-        if node.game.get_winner() is None:
-            node = node.expand()
-        if node:
+            path.append(node.move)
+            depth += 1
+            logging.debug(f"Selected child node at depth {depth}, move: {node.move}, UCB1: {node.ucb1(self.exploration_weight):.4f}")
+
+        if depth < max_depth and node.game.get_valid_moves():
+            new_node = node.expand()
+            if new_node:
+                node = new_node
+                path.append(node.move)
+                depth += 1
+            else:
+                logging.debug("No expansion possible")
+                value = 0.0
+                node.backpropagate(value)
+                return
+
+        value = self.random_rollout(node.game, max_depth=max_depth - depth)
+        logging.debug(f"Rollout completed, value: {value:.4f}")
+
+        if node.game.get_valid_moves():
             state_tensor = self.board_to_tensor(node.game)
-            value = self.dqn_agent.main_network.predict(state_tensor[np.newaxis, ...], verbose=0).max()
-            if value < 0.1:
-                value = self.default_evaluate_board(node.game)
-            node.backpropagate(value)
+            state_tensor = state_tensor.unsqueeze(0).to(self.dqn_agent.device)
+            state_tensor = state_tensor.permute(0, 3, 1, 2)
+            with torch.no_grad():
+                dqn_value = self.dqn_agent.main_network(state_tensor).max().item()
+            value = dqn_value if dqn_value > 0.1 else value
+            logging.debug(f"Evaluated node with DQN value: {dqn_value:.4f}, final value: {value:.4f}")
+
+        node.backpropagate(value)
 
     def make_move(self, game, previous_move):
-        start_time = time.perf_counter()  # Bắt đầu đo thời gian
+        start_time = time.perf_counter()
         valid_moves = game.get_valid_moves()
         if not valid_moves:
             elapsed_time = time.perf_counter() - start_time
             logging.info(f"Move time: {elapsed_time:.4f} seconds (No valid moves)")
             return None
 
-        root = MCTSNode(game)
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(self.simulate_node, root) for _ in range(self.iterations)]
-            for future in futures:
-                future.result()
+        #logging.info("Current board state:")
+        game.__str__()
 
-        if not root.children:
-            elapsed_time = time.perf_counter() - start_time
-            logging.info(f"Move time: {elapsed_time:.4f} seconds (Random choice)")
-            return random.choice(valid_moves) if valid_moves else None
+        if random.uniform(0, 1) < self.dqn_agent.epsilon:
+            best_move = random.choice(valid_moves)
+            logging.info(f"Epsilon-greedy: Random move selected: {best_move}")
+        else:
+            root = MCTSNode(copy.deepcopy(game))
+            root.game.board_history = {}
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [executor.submit(self.simulate_node, root) for _ in range(self.iterations)]
+                for future in futures:
+                    try:
+                        future.result(timeout=20)
+                    except TimeoutError:
+                        logging.warning("Simulation thread timed out")
 
-        capturing_moves = []
-        board = game.get_board()
-        for child in root.children:
-            y, x = _get_index_movement(board, child.move, game.is_red_move())
-            captured = board[y][x]
-            if captured and captured.is_red != game.is_red_move():
-                capturing_moves.append((child.move, child.visits))
+            if not root.children:
+                elapsed_time = time.perf_counter() - start_time
+                logging.info(f"Move time: {elapsed_time:.4f} seconds (Random choice)")
+                return random.choice(valid_moves) if valid_moves else None
 
-        best_move = max(capturing_moves, key=lambda x: x[1])[0] if capturing_moves else \
-                    max(root.children, key=lambda c: c.visits).move
+            best_move = max(root.children, key=lambda c: c.visits).move
+            logging.info(f"MCTS selected move: {best_move}")
+
         self.move_history.append(best_move)
-        
-        elapsed_time = time.perf_counter() - start_time  # Tính thời gian thực hiện
+        elapsed_time = time.perf_counter() - start_time
         logging.info(f"Move time: {elapsed_time:.4f} seconds for move {best_move}")
         return best_move
 
@@ -148,29 +199,44 @@ class DQNAgent:
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995
+        self.epsilon_decay = 0.99
         self.learning_rate = 0.001
         self.update_targetnn_rate = 10
-        self.batch_size = 64
-        self.main_network = self.get_nn()
-        self.target_network = self.get_nn()
-        self.target_network.set_weights(self.main_network.get_weights())
+        self.batch_size = 64 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logging.info(f"Using device in DQNAgent: {self.device}")
+        self.main_network = self.get_nn().to(self.device)
+        self.target_network = self.get_nn().to(self.device)
+        self.target_network.eval()
+        self.optimizer = optim.Adam(self.main_network.parameters(), lr=self.learning_rate)
+        self.loss_fn = nn.MSELoss()
         self.total_time_step = 0
+        self.episode = 0  # Khởi tạo episode
 
     def get_nn(self):
-        model = Sequential([
-            Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=self.state_size),
-            Conv2D(64, (3, 3), activation='relu', padding='same'),
-            Flatten(),
-            Dense(256, activation='relu'),
-            Dense(self.action_size, activation='linear')
-        ])
-        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
-        return model
+        class DQN(nn.Module):
+            def __init__(self, state_size, action_size):
+                super(DQN, self).__init__()
+                self.conv1 = nn.Conv2d(state_size[2], 32, kernel_size=5, padding=2)
+                self.conv2 = nn.Conv2d(32, 64, kernel_size=5, padding=2)
+                conv_out_size = state_size[0] * state_size[1] * 64
+                self.fc1 = nn.Linear(conv_out_size, 256)
+                self.fc2 = nn.Linear(256, action_size)
+                self.relu = nn.ReLU()
+
+            def forward(self, x):
+                x = self.relu(self.conv1(x))
+                x = self.relu(self.conv2(x))
+                x = x.reshape(x.size(0), -1)
+                x = self.relu(self.fc1(x))
+                x = self.fc2(x)
+                return x
+
+        return DQN(self.state_size, self.action_size)
 
     def board_to_tensor(self, game):
         board = game.get_board()
-        tensor = np.zeros((10, 9, len(PIECES)), dtype=np.float32)
+        tensor = torch.zeros((10, 9, len(PIECES)), dtype=torch.float32)
         for r in range(10):
             for c in range(9):
                 piece = board[r][c]
@@ -188,37 +254,53 @@ class DQNAgent:
 
     def get_batch_from_buffer(self, batch_size):
         exp_batch = random.sample(self.replay_buffer, batch_size)
-        state_batch = np.array([batch[0] for batch in exp_batch])
-        action_batch = np.array([batch[1] for batch in exp_batch])
-        reward_batch = [batch[2] for batch in exp_batch]
-        next_state_batch = np.array([batch[3] for batch in exp_batch])
-        terminal_batch = [batch[4] for batch in exp_batch]
+        state_batch = torch.stack([batch[0] for batch in exp_batch])
+        action_batch = torch.tensor([batch[1] for batch in exp_batch], dtype=torch.long)
+        reward_batch = torch.tensor([batch[2] for batch in exp_batch], dtype=torch.float32)
+        next_state_batch = torch.stack([batch[3] for batch in exp_batch])
+        terminal_batch = torch.tensor([batch[4] for batch in exp_batch], dtype=torch.bool)
         return state_batch, action_batch, reward_batch, next_state_batch, terminal_batch
 
-    def train_main_network(self, batch_size):
+    def train_main_network(self, batch_size=64):
         if len(self.replay_buffer) < batch_size:
             logging.info(f"Not enough samples in replay buffer: {len(self.replay_buffer)}/{batch_size}")
             return
         logging.debug("Starting training of main network")
         state_batch, action_batch, reward_batch, next_state_batch, terminal_batch = self.get_batch_from_buffer(batch_size)
 
+        self.main_network.train()
+        if dqn_agent.epsilon > dqn_agent.epsilon_min:dqn_agent.epsilon *= dqn_agent.epsilon_decay
+        self.update_targetnn_rate-=1 #le
+        if self.update_targetnn_rate==0:
+            self.target_network.load_state_dict(self.main_network.state_dict())
+            self.update_targetnn_rate==10
+        state_batch = state_batch.to(self.device)
+        state_batch = state_batch.permute(0, 3, 1, 2)
+        action_batch = action_batch.to(self.device)
+        reward_batch = reward_batch.to(self.device)
+        next_state_batch = next_state_batch.to(self.device)
+        next_state_batch = next_state_batch.permute(0, 3, 1, 2)
+        terminal_batch = terminal_batch.to(self.device)
+
         def predict_batch(states):
-            return self.main_network.predict(states, verbose=0)
+            with torch.no_grad():
+                return self.main_network(states)
 
         def predict_target_batch(states):
-            return self.target_network.predict(states, verbose=0)
+            with torch.no_grad():
+                return self.target_network(states)
 
         batch_split = 4
         split_size = batch_size // batch_split
-        q_values = np.zeros((batch_size, self.action_size))
-        next_q_values = np.zeros((batch_size, self.action_size))
+        q_values = torch.zeros((batch_size, self.action_size), device=self.device)
+        next_q_values = torch.zeros((batch_size, self.action_size), device=self.device)
 
         with ThreadPoolExecutor(max_workers=batch_split) as executor:
             futures = []
             for i in range(0, batch_size, split_size):
                 state_slice = state_batch[i:i+split_size]
                 next_state_slice = next_state_batch[i:i+split_size]
-                futures.append(executor.submit(predict_batch, state_slice))
+                futures.append(executor.submit(predict_target_batch, state_slice))
                 futures.append(executor.submit(predict_target_batch, next_state_slice))
             
             idx = 0
@@ -232,127 +314,132 @@ class DQNAgent:
                 if idx >= batch_size:
                     idx = 0
 
-        max_next_q = np.amax(next_q_values, axis=1)
+        max_next_q = next_q_values.max(dim=1)[0]
+        target_q = q_values.clone()
         for i in range(batch_size):
             new_q_values = reward_batch[i] if terminal_batch[i] else reward_batch[i] + self.gamma * max_next_q[i]
-            q_values[i][action_batch[i]] = new_q_values
+            target_q[i][action_batch[i]] = new_q_values
 
-        self.main_network.fit(state_batch, q_values, verbose=0)
+        self.optimizer.zero_grad()
+        output = self.main_network(state_batch)
+        loss = self.loss_fn(output, target_q)
+        loss.backward()
+        self.optimizer.step()
+
         logging.debug("Finished training batch")
-
-    def make_decision(self, state, valid_moves):
-        if random.uniform(0, 1) < self.epsilon:
-            return random.choice(valid_moves)
-        state = state[np.newaxis, ...]
-        q_values = self.main_network.predict(state, verbose=0)[0]
-        valid_indices = [self.encode_move(move, valid_moves) for move in valid_moves]
-        valid_q = [q_values[i] for i in valid_indices]
-        return valid_moves[np.argmax(valid_q)]
 
     def save(self, base_path):
         os.makedirs(os.path.dirname(base_path), exist_ok=True)
-        self.main_network.save_weights(f"{base_path}_main.weights.h5")
-        self.target_network.save_weights(f"{base_path}_target.weights.h5")
-        np.save(f"{base_path}_exp.npy", np.array(self.replay_buffer, dtype=object))
-        params = {
-            'gamma': self.gamma,
-            'epsilon': self.epsilon,
-            'epsilon_min': self.epsilon_min,
-            'epsilon_decay': self.epsilon_decay,
-            'learning_rate': self.learning_rate,
-            'batch_size': self.batch_size,
-            'update_targetnn_rate': self.update_targetnn_rate,
-            'total_time_step': self.total_time_step
-        }
-        with open(f"{base_path}_params.json", 'w') as f:
-            json.dump(params, f)
-        print(f"Đã lưu toàn bộ mô hình tại {base_path}")
+        torch.save({
+            "gamma": self.gamma,
+            "epsilon": self.epsilon,
+            "epsilon_min": self.epsilon_min,
+            "epsilon_decay": self.epsilon_decay,
+            "learning_rate": self.learning_rate,
+            "main_network": self.main_network.state_dict(),
+        }, base_path)
+        logging.info(f"Saved model at {base_path}")
 
     def load(self, base_path):
-        self.main_network.load_weights(f"{base_path}_main.weights.h5")
-        self.target_network.load_weights(f"{base_path}_target.weights.h5")
-        buffer = np.load(f"{base_path}_exp.npy", allow_pickle=True)
-        self.replay_buffer = deque(buffer, maxlen=self.replay_buffer.maxlen)
-        with open(f"{base_path}_params.json", 'r') as f:
-            params = json.load(f)
-            self.gamma = params['gamma']
-            self.epsilon = params['epsilon']
-            self.epsilon_min = params['epsilon_min']
-            self.epsilon_decay = params['epsilon_decay']
-            self.learning_rate = params['learning_rate']
-            self.batch_size = params['batch_size']
-            self.update_targetnn_rate = params['update_targetnn_rate']
-            self.total_time_step = params['total_time_step']
-        print(f"Đã tải mô hình từ {base_path}")
-
+        if os.path.exists(base_path):
+            open_model = torch.load(base_path, map_location=self.device)
+            if isinstance(open_model, dict):
+                logging.info("Successfully loaded checkpoint data")
+                self.gamma = open_model.get("gamma")
+                self.epsilon = open_model.get("epsilon")
+                self.epsilon_min = open_model.get("epsilon_min")
+                self.epsilon_decay = open_model.get("epsilon_decay")
+                self.learning_rate = open_model.get("learning_rate")
+                self.main_network.load_state_dict(open_model["main_network"])
+                print(f"gia tri cua epsilon {self.epsilon}")
+        self.target_network.load_state_dict(self.main_network.state_dict())
+        self.target_network.eval()
 # Chương trình chính
 if __name__ == "__main__":
     env = ChessGame()
+    env.board_history = {}
     state_size = (10, 9, len(PIECES))
     action_size = 200
-    n_episodes = 100
     n_timesteps = 500
     batch_size = 64
 
     dqn_agent = DQNAgent(state_size=state_size, action_size=200)
+    
+    # Tải mô hình nếu có
+    base_dir = "trained_models"
+    model_path = os.path.join(base_dir, "chinese_chess_dqn.pth")
+    dqn_agent.load(model_path)
+    start_ep = dqn_agent.episode
+
+    mcts_player = MCTSPlayer(dqn_agent=dqn_agent, iterations=1000, max_workers=15)
+    
+    ep = start_ep
     try:
-        dqn_agent.load("trained_models/chinese_chess_dqn")
-        logging.info("Loaded pre-trained model successfully")
-    except Exception as e:
-        logging.warning(f"Failed to load model: {e}. Using untrained model.")
+        while True:
+            ep += 1
+            ep_rewards = 0
+            env = ChessGame()
+            env.board_history = {}
+            mcts_player.reset_opening()
+            state = dqn_agent.board_to_tensor(env)
+            logging.info(f"\n=== Starting Episode {ep} ===")
+            for t in range(n_timesteps):
+                dqn_agent.total_time_step += 1
+                action = mcts_player.make_move(env, env.last_move)
+                if action is None:
+                    logging.info("No valid moves available!")
+                    break
+                
+                env.make_move(action)
+                logging.info("Board after move:")
+                env.__str__()
+                next_state = dqn_agent.board_to_tensor(env)
+                reward = 0.0  # Khởi tạo reward, không dùng default_evaluate_board, chỉ phạt mất quân
+                board = env.get_board()
+                red_cannons = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'cannon' and board[y][x].is_red)
+                red_rooks = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'rook' and board[y][x].is_red)
+                black_cannons = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'cannon' and not board[y][x].is_red)
+                black_rooks = sum(1 for y in range(10) for x in range(9) if board[y][x] and board[y][x].kind == 'rook' and not board[y][x].is_red)
+                if env.is_red_move():
+                    if black_cannons < 2:
+                        reward -= 0.03
+                    if black_rooks < 2:
+                        reward -= 0.05
+                else:
+                    if red_cannons < 2:
+                        reward -= 0.03
+                    if red_rooks < 2:
+                        reward -= 0.05
+                terminal = env.get_winner() is not None
 
-    mcts_player = MCTSPlayer(dqn_agent=dqn_agent, iterations=500, max_workers=4)
+                action_idx = dqn_agent.encode_move(action, env.get_valid_moves())
+                dqn_agent.save_experience(state, action_idx, reward, next_state, terminal)
 
-    for ep in range(30, n_episodes):
-        ep_rewards = 0
-        env = ChessGame()
-        mcts_player.reset_opening()
-        state = dqn_agent.board_to_tensor(env)
-        logging.info(f"\n=== Starting Episode {ep + 1} ===")
+                state = next_state
+                ep_rewards += reward
 
-        for t in range(n_timesteps):
-            dqn_agent.total_time_step += 1
-            if dqn_agent.total_time_step % dqn_agent.update_targetnn_rate == 0:
-                dqn_agent.target_network.set_weights(dqn_agent.main_network.get_weights())
-                logging.debug("Updated target network weights")
+                logging.info(f"Move: {action} | Reward: {reward:.4f}")
 
-            action = mcts_player.make_move(env, env.last_move)
-            if action is None:
-                logging.info("No valid moves available!")
-                break
+                if terminal:
+                    winner = env.get_winner()
+                    logging.info(f"Episode {ep} ended with winner: {winner}, Total reward: {ep_rewards:.4f}")
+                    break
 
-            env.make_move(action)
-            env.__str__()
-            next_state = dqn_agent.board_to_tensor(env)
-            reward = mcts_player.default_evaluate_board(env)
-            terminal = env.get_winner() is not None
+                if len(dqn_agent.replay_buffer) > batch_size:
+                    dqn_agent.train_main_network(batch_size)
 
-            action_idx = dqn_agent.encode_move(action, env.get_valid_moves())
-            dqn_agent.save_experience(state, action_idx, reward, next_state, terminal)
+            if not terminal:
+                logging.info(f"Episode {ep} reached {t + 1} moves, Total reward: {ep_rewards:.4f}")
 
-            state = next_state
-            ep_rewards += reward
+            # Lưu mô hình mỗi 10 episode
+            if ep % 1 == 0:
+                dqn_agent.episode = ep
+                dqn_agent.save(model_path)
+                logging.info(f"Saved model at episode {ep}")
 
-            logging.info(f"Move: {action} | Reward: {reward:.4f}")
-
-            if terminal:
-                winner = env.get_winner()
-                logging.info(f"Episode {ep + 1} ended with winner: {winner}, Total reward: {ep_rewards:.4f}")
-                break
-
-            if len(dqn_agent.replay_buffer) > batch_size:
-                dqn_agent.train_main_network(batch_size)
-
-        if dqn_agent.epsilon > dqn_agent.epsilon_min:
-            dqn_agent.epsilon *= dqn_agent.epsilon_decay
-            logging.debug(f"Updated epsilon: {dqn_agent.epsilon:.4f}")
-
-        if not terminal:
-            logging.info(f"Episode {ep + 1} reached {t + 1} moves, Total reward: {ep_rewards:.4f}")
-
-        if (ep + 1) % 10 == 0:
-            dqn_agent.save(f"trained_models/chinese_chess_dqn")
-            logging.info(f"Saved model at episode {ep + 1}")
-
-    dqn_agent.main_network.save("trained_models/chinese_chess_dqn_final")
-    logging.info("Saved final model.")
+    except KeyboardInterrupt:
+        logging.info(f"Training interrupted at episode {ep}. Saving model...")
+        dqn_agent.episode = ep
+        dqn_agent.save(model_path)
+        logging.info(f"Saved model at episode {ep}")
+        raise
