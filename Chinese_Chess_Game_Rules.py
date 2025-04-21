@@ -81,11 +81,30 @@ class ChessGame:
         self.move_history.append(move)
 
     def copy_and_make_move(self, move):
+        if move is None:
+            # Trả về bản sao của trò chơi với trạng thái hiện tại
+            new_board = copy.deepcopy(self._board)
+            new_game = ChessGame(
+                board=new_board,
+                red_active=self._is_red_active,
+                move_count=self._move_count
+            )
+            new_game._valid_moves = copy.deepcopy(self._valid_moves)
+            new_game.board_history = copy.deepcopy(self.board_history)
+            new_game.move_history = copy.deepcopy(self.move_history)
+            new_game.last_move = self.last_move
+            return new_game
+        
         new_board = self._board_after_move(move, self._is_red_active)
-        new_game = ChessGame(board=new_board,
-                             red_active=not self._is_red_active,
-                             move_count=self._move_count + 1)
+        new_game = ChessGame(
+            board=new_board,
+            red_active=not self._is_red_active,
+            move_count=self._move_count + 1
+        )
         new_game._valid_moves = []
+        new_game.board_history = copy.deepcopy(self.board_history)
+        new_game.move_history = copy.deepcopy(self.move_history + [move])
+        new_game.last_move = move
         return new_game
 
     def is_red_move(self):
@@ -349,6 +368,8 @@ class ChessGame:
         return self._board
 
     def _board_after_move(self, move, is_red):
+        if move is None:
+            raise ValueError("Move cannot be None in _board_after_move")
         board_copy = copy.deepcopy(self._board)
 
         start_pos = _wxf_to_index(self._board, move[0:2], is_red)
@@ -946,167 +967,6 @@ def _index_to_wxf(board, pos, is_red):
             return str(pieces.index((pos[0], pos[1])) + 1) + str(9 - x)
         else:
             return str(len(pieces) - pieces.index((pos[0], pos[1]))) + str(x + 1)
-
-def calculate_absolute_points(board):
-    points_so_far = 0
-    for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]:
-        piece = board[pos[0]][pos[1]]
-        if piece is None:
-            continue
-        else:
-            if piece.kind == 'p':
-                points_so_far += _absolute_pawn(board, pos)
-            elif piece.kind == 'h':
-                points_so_far += _absolute_horse(board, pos)
-            elif piece.kind == 'e':
-                points_so_far += _absolute_elephant(board, pos)
-            elif piece.kind == 'c':
-                points_so_far += _absolute_cannon(board, pos)
-            elif piece.kind == 'r':
-                points_so_far += _absolute_chariot(board, pos)
-            elif piece.kind == 'k':
-                points_so_far += _absolute_king(board, pos)
-            else:
-                points_so_far += _absolute_advisor(board, pos)
-    return points_so_far
-
-def _absolute_pawn(board, pos):
-    points_so_far = 0
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    if (piece.is_red and pos[0] <= 4) or (not piece.is_red and pos[0] >= 5):
-        points_so_far += 200 * side
-    else:
-        points_so_far += 100 * side
-
-    return points_so_far
-
-def _absolute_horse(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 400
-
-    if pos[0] == 1 and pos[1] in {2, 6} and side == 1:
-        points_so_far += 70
-    elif pos[0] == 8 and pos[1] in {2, 6} and side == -1:
-        points_so_far -= 70
-
-    if pos[0] == 2 and pos[1] in {3, 5} and side == 1:
-        points_so_far += 30
-    elif pos[0] == 7 and pos[1] in {3, 5} and side == -1:
-        points_so_far -= 30
-
-    return points_so_far
-
-def _absolute_elephant(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 200
-
-    if pos[0] == 7 and pos[1] == 4 and side == 1:
-        points_so_far += 20
-    elif pos[0] == 2 and pos[1] == 4 and side == -1:
-        points_so_far -= 20
-
-    if pos[0] == 7 and pos[1] in {0, 8} and side == 1:
-        points_so_far -= 10
-    elif pos[0] == 2 and pos[1] in {0, 8} and side == -1:
-        points_so_far += 10
-
-    return points_so_far
-
-def _absolute_cannon(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 450
-
-    if pos[1] == 4 and pos[0] in {3, 4, 5} and side == 1:
-        points_so_far += 60
-    elif pos[1] == 4 and pos[0] in {4, 5, 6} and side == -1:
-        points_so_far -= 60
-
-    if pos[0] == 0 and pos[1] in {0, 1, 7, 8} and side == 1:
-        points_so_far += 30
-    elif pos[0] == 9 and pos[1] in {0, 1, 7, 8} and side == -1:
-        points_so_far -= 30
-
-    return points_so_far
-
-def _absolute_king(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 10000
-
-    if pos[0] in {7, 8} and side == 1:
-        points_so_far -= 10
-    elif pos[0] in {1, 2} and side == -1:
-        points_so_far += 10
-
-    game = ChessGame(board, red_active=piece.is_red)
-
-    if game.is_in_check(board, piece.is_red):
-        points_so_far -= 500 * side
-    return points_so_far
-
-def _absolute_chariot(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 900
-
-    if pos[0] == 9 and pos[1] in {0, 8} and side == 1:
-        points_so_far -= 10
-    elif pos[0] == 0 and pos[1] in {0, 8} and side == -1:
-        points_so_far += 10
-
-    return points_so_far
-
-def _absolute_advisor(board, pos):
-    piece = board[pos[0]][pos[1]]
-    if piece.is_red:
-        side = 1
-    else:
-        side = -1
-
-    points_so_far = side * 200
-
-    if pos[0] == 7 and pos[1] in {3, 5} and side == 1:
-        points_so_far -= 10
-    elif pos[0] == 2 and pos[1] in {3, 5} and side == -1:
-        points_so_far += 10
-
-    return points_so_far
-
-def piece_count(board):
-    pieces_so_far = 0
-    for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]:
-        if board[pos[0]][pos[1]] is not None:
-            pieces_so_far += 1
-
-    return pieces_so_far
 
 class _Piece:
     def __init__(self, kind, is_red):
