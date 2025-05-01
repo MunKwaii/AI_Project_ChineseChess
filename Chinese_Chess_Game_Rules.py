@@ -1,5 +1,6 @@
 import statistics
 import copy
+import logging
 
 _MAX_MOVES = 200
 
@@ -765,6 +766,48 @@ class ChessGame:
         except Exception as e:
             logging.error(f"Error parsing FEN {fen}: {e}")
             raise ValueError(f"Failed to set board from FEN: {e}")
+        
+    def get_valid_moves_for_piece(self, pos):
+        """Trả về danh sách các nước đi hợp lệ cho quân cờ tại vị trí (r, c).
+        
+        Args:
+            pos: Tuple (r, c) biểu diễn hàng và cột của quân cờ.
+        
+        Returns:
+            Danh sách các nước đi hợp lệ ở định dạng WXF (ví dụ: ['p7+1', 'r1+2']).
+        """
+        r, c = pos
+        piece = self._board[r][c]
+        if not piece or piece.is_red != self._is_red_active:
+            return []
+
+        # Lấy các nước đi thô dựa trên loại quân cờ
+        if piece.kind == 'r':
+            raw_moves = self._calculate_moves_for_chariot(self._board, pos)
+        elif piece.kind == 'h':
+            raw_moves = self._calculate_moves_for_horse(self._board, pos)
+        elif piece.kind == 'e':
+            raw_moves = self._calculate_moves_for_elephant(self._board, pos)
+        elif piece.kind == 'a':
+            raw_moves = self._calculate_moves_for_advisor(self._board, pos)
+        elif piece.kind == 'k':
+            raw_moves = self._calculate_moves_for_king(self._board, pos)
+        elif piece.kind == 'c':
+            raw_moves = self._calculate_moves_for_cannon(self._board, pos)
+        elif piece.kind == 'p':
+            raw_moves = self._calculate_moves_for_pawn(self._board, pos)
+        else:
+            return []
+
+        # Lọc các nước đi để đảm bảo không để Tướng bị chiếu
+        valid_moves = []
+        for move in raw_moves:
+            temp_board = self._board_after_move(move, self._is_red_active)
+            if not self.is_in_check(temp_board, self._is_red_active):
+                valid_moves.append(move)
+
+        return valid_moves
+    
 
 def print_board(board):
     row_normal = '丨    丨    丨    丨    丨    丨    丨    丨    丨'
