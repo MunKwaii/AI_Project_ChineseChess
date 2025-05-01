@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from Game_UI import Game  # Giả định đây là file Game.py bạn đã có
-from Player import MCTSPlayer, DQNAgent  # Dùng MCTSPlayer của bạn
+from Player import ChessAgent  # Sử dụng ChessAgent từ file Player.py
 from PIL import Image, ImageTk
 import os
 import threading
@@ -12,13 +12,11 @@ class ChineseChessApp:
         self.root.title("Chinese Chess")
         self.root.geometry("600x500")
         
-        # Load MCTS player
-        self.dqn_agent = DQNAgent()
-        model_path = "trained_models/chinese_chess_dqn"
+        # Load ChessAgent
+        self.player = ChessAgent(state_size=(10, 9), action_size=4000)
+        model_path = "trained_models/chinese_chess_alpha.pth"
         if os.path.exists(model_path):
-            self.dqn_agent.main_network.load_weights(model_path)
-            print(f"Loaded DQN model from {model_path}")
-        self.player = MCTSPlayer(dqn_agent=self.dqn_agent, iterations=100)
+            print(f"Loaded ChessAgent model from {model_path}")
         # Sound states
         self.bgm_enabled = True
         self.sfx_enabled = True
@@ -94,7 +92,7 @@ class ChineseChessApp:
         play_btn.pack(side=tk.LEFT, padx=10)
         
         self.status_var = tk.StringVar()
-        self.status_var.set("Ready with MCTS Player")
+        self.status_var.set("Ready with ChessAgent")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(fill=tk.X, pady=(20, 0))
     
@@ -107,7 +105,7 @@ class ChineseChessApp:
         self.sfx_button.config(image=self.sfx_icon if self.sfx_enabled else self.sfx_muted_icon)
     
     def start_game(self):
-        self.status_var.set("Starting game with MCTS...")
+        self.status_var.set("Starting game with ChessAgent...")
         self.root.after(100, self._run_game)
     
     def _run_game(self):
