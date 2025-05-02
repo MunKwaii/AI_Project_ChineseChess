@@ -66,7 +66,7 @@ class ChineseChessApp:
         alpha_beta_hover = self.alpha_beta_button_rect.collidepoint(mouse_pos)
 
         self.draw_button(self.chess_agent_button_rect, "MCTS With Policy/Value Network", chess_agent_hover)
-        self.draw_button(self.alpha_beta_button_rect, "Alpha-Beta With Minimax", alpha_beta_hover)
+        self.draw_button(self.alpha_beta_button_rect, "Minimax With Alpha-Beta Pruning", alpha_beta_hover)
 
         pygame.display.flip()
 
