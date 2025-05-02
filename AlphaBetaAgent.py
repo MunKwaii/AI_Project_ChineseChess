@@ -31,7 +31,7 @@ class AlphaBetaAgent:
             return True
         return False
     
-    def make_move(self, game, prev_move=None):
+    def get_move(self, game, prev_move=None):
         """
         Tìm nước đi tốt nhất sử dụng thuật toán Alpha-Beta.
         

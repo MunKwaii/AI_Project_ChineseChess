@@ -22,7 +22,7 @@ class MinimaxAgent:
         self.max_depth = max_depth
         self.nodes_evaluated = 0  
 
-    def make_move(self, game, prev_move=None):
+    def get_move(self, game, prev_move=None):
         """
         Tìm nước đi tốt nhất sử dụng thuật toán Minimax.
         
