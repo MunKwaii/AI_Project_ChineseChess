@@ -25,13 +25,13 @@ class ChineseChessApp:
         self.TEXT_COLOR = (0, 0, 0)  
         self.TITLE_COLOR = (231, 191, 118) 
         self.TITLE_SHADOW_COLOR = (0, 0, 0)  
-        self.BUTTON_BORDER_COLOR = (255, 255, 255)  
+        self.BUTTON_BORDER_COLOR = (0, 0, 0)  
 
         self.title_font = pygame.font.SysFont('Times New Roman', 80, bold=True)
         self.button_font = pygame.font.SysFont('Arial', 32, bold=True)
 
-        self.chess_agent_button_rect = pygame.Rect(300, 250, 300, 80)
-        self.alpha_beta_button_rect = pygame.Rect(300, 350, 300, 80)
+        self.chess_agent_button_rect = pygame.Rect(250, 250, 430, 80)
+        self.alpha_beta_button_rect = pygame.Rect(250, 380, 430, 80)
 
         try:
             self.background = pygame.image.load('Effect_Graphics/Background.jpg')
@@ -65,8 +65,8 @@ class ChineseChessApp:
         chess_agent_hover = self.chess_agent_button_rect.collidepoint(mouse_pos)
         alpha_beta_hover = self.alpha_beta_button_rect.collidepoint(mouse_pos)
 
-        self.draw_button(self.chess_agent_button_rect, "Play with Policy", chess_agent_hover)
-        self.draw_button(self.alpha_beta_button_rect, "Play with AlphaBeta", alpha_beta_hover)
+        self.draw_button(self.chess_agent_button_rect, "MCTS With Policy/Value Network", chess_agent_hover)
+        self.draw_button(self.alpha_beta_button_rect, "Alpha-Beta With Minimax", alpha_beta_hover)
 
         pygame.display.flip()
 
