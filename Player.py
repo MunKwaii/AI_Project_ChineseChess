@@ -10,9 +10,12 @@ import torch.nn as nn
 import torch.optim as optim
 import logging
 import requests
+import pandas as pd
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from Chinese_Chess_Game_Rules import ChessGame, _Piece, PIECES, print_board, _wxf_to_index, _get_index_movement
+import re
+from threading import Lock
 
 # Cấu hình logging
 logging.basicConfig(
@@ -35,7 +38,7 @@ PIECE_TO_NUMBER = {
     ('p', True): 1, ('p', False): -1,
 }
 
-# Mạng Policy
+# Mạng Policy với Residual Connections
 class PolicyNetwork(nn.Module):
     def __init__(self, action_size=4000):
         super(PolicyNetwork, self).__init__()
@@ -75,7 +78,7 @@ class ValueNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         return torch.tanh(self.fc3(x))
 
-# Nút MCTS
+# Nút MCTS với Lock
 class MCTSNode:
     def __init__(self, game, parent=None, move=None, prior_p=1.0):
         self.game = game
@@ -88,38 +91,42 @@ class MCTSNode:
         self.P = {}
         self.visits = 0
         self.prior_p = prior_p
+        self.lock = Lock()
 
     def expand(self, moves, probs):
-        for move, prob in zip(moves, probs):
-            if move not in self.children:
-                new_game = self.game.copy_and_make_move(move)
-                self.children[move] = MCTSNode(new_game, self, move, prob)
-                self.N[move] = 0
-                self.W[move] = 0
-                self.Q[move] = 0
-                self.P[move] = prob
-        logging.debug(f"Expanded node with {len(self.children)} children")
+        with self.lock:
+            for move, prob in zip(moves, probs):
+                if move not in self.children:
+                    new_game = self.game.copy_and_make_move(move)
+                    self.children[move] = MCTSNode(new_game, self, move, prob)
+                    self.N[move] = 0
+                    self.W[move] = 0
+                    self.Q[move] = 0
+                    self.P[move] = prob
+            logging.debug(f"Expanded node with {len(self.children)} children")
 
-    def select(self, c=2.0):
-        best_score = -float('inf')
-        best_move = None
-        for move in self.P:
-            u = self.P[move] * c * (np.sqrt(self.visits + 1) / (1 + self.N[move]))
-            score = self.Q[move] + u
-            if score > best_score:
-                best_score = score
-                best_move = move
-        return best_move
+    def select(self, c=5.0):
+        with self.lock:
+            best_score = -float('inf')
+            best_move = None
+            for move in self.P:
+                u = self.P[move] * c * (np.sqrt(self.visits + 1) / (1 + self.N[move]))
+                score = self.Q[move] + u
+                if score > best_score:
+                    best_score = score
+                    best_move = move
+            return best_move
 
     def update(self, move, value):
-        self.N[move] = self.N.get(move, 0) + 1
-        self.W[move] = self.W.get(move, 0) + value
-        self.Q[move] = self.W[move] / self.N[move]
-        self.visits += 1
+        with self.lock:
+            self.N[move] = self.N.get(move, 0) + 1
+            self.W[move] = self.W.get(move, 0) + value
+            self.Q[move] = self.W[move] / self.N[move]
+            self.visits += 1
 
 # Lớp ChessAgent
 class ChessAgent:
-    def __init__(self, state_size=(10, 9), action_size=4000):
+    def __init__(self, state_size=(10, 9), action_size=4000, use_api=True):
         self.state_size = state_size
         self.action_size = action_size
         self.replay_buffer = []
@@ -129,10 +136,11 @@ class ChessAgent:
         self.epsilon_decay = 0.995
         self.learning_rate = 0.0001
         self.update_frequency = 10
+        self.use_api = use_api  # Thêm cờ để kiểm soát việc gọi API
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logging.info(f"Using device: {self.device}")
         if self.device.type == "cpu" and torch.cuda.is_available():
-            logging.warning("GPU is available but not used. Consider enabling CUDA for faster training.")
+            logging.warning("GPU is available but not used.")
 
         self.policy_network = PolicyNetwork(action_size).to(self.device)
         self.value_network = ValueNetwork().to(self.device)
@@ -161,7 +169,6 @@ class ChessAgent:
         retries = Retry(total=10, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         self.session.mount('http://', HTTPAdapter(max_retries=retries))
 
-        # Cache cho API
         self.api_cache = {}
         self.cache_path = "api_cache.pkl"
         self.load_api_cache()
@@ -169,13 +176,13 @@ class ChessAgent:
         self.api_success_count = 0
         self.api_fail_threshold = 10
 
-        # Danh sách nước đi khai cuộc cố định
         self.opening_moves = [
-            'c3+2', 'h2+3', 'r1+2', 'r9+2', 'p7+1', 'p3+1',
-            'h8+7', 'c8+2', 'r1+1', 'r9+1', 'e3+5', 'e7+5'
+            'c2+2', 'c8+2', 'h2+3', 'h8+7', 'r1+2', 'r9+2', 'p7+1', 'p3+1',
+            'e3+5', 'e7+5', 'r1+1', 'r9+1', 'c2+4', 'c8+4', 'h2+5', 'h8+5'
         ]
 
         self.move_history = []
+        logging.info(f"Initialized ChessAgent with use_api={self.use_api}")
 
     def load_api_cache(self):
         if os.path.exists(self.cache_path):
@@ -331,6 +338,10 @@ class ChessAgent:
         return wxf_move
 
     def fetch_moves_from_cdb(self, fen, max_retries=10):
+        if not self.use_api:
+            logging.debug("API disabled, returning empty move list")
+            return []
+
         if fen in self.api_cache:
             moves = self.api_cache[fen]
             if moves:
@@ -389,10 +400,9 @@ class ChessAgent:
                         self.save_api_cache()
                         return []
 
-                    # Điều chỉnh Score và tính xác suất bằng softmax
                     scores = np.array([score for _, score in moves_with_scores])
-                    scores = np.clip(scores, -10, 10)  # Giới hạn Score
-                    tau = 50  # Tăng tau để giảm độ chênh lệch
+                    scores = np.clip(scores, -10, 10)
+                    tau = 50
                     exp_scores = np.exp(scores / tau)
                     priors = exp_scores / np.sum(exp_scores)
                     moves = [move for move, _ in moves_with_scores]
@@ -415,151 +425,109 @@ class ChessAgent:
                 return []
         logging.error(f"All {max_retries} attempts failed for FEN: {fen}")
         return []
-        
+
     def calculate_reward(self, game, prev_board, curr_board):
         reward = 0.0
         winner = game.get_winner()
         move_count = game._move_count
-        decay_factor_early = np.exp(-0.001 * move_count)  # Decay chậm cho giai đoạn đầu
-        decay_factor_late = np.exp(-0.005 * move_count)   # Decay nhanh cho giai đoạn cuối
+        decay_factor_early = np.exp(-0.001 * move_count)
+        decay_factor_late = np.exp(-0.005 * move_count)
 
-        # Kiểm tra kết thúc ván cờ
         if winner:
             if winner == 'Red' and game.is_red_move() or winner == 'Black' and not game.is_red_move():
-                reward = 10.0  # Phần thưởng lớn hơn cho chiến thắng
+                reward = 8.0
             elif winner == 'Draw':
                 reward = 0.0
             else:
-                reward = -10.0
+                reward = -8.0
             logging.info(f"Winner detected: {winner}, Reward: {reward}")
             return reward
 
-        # Kiểm tra chiếu bí hoặc chiếu tướng
         opponent_in_check = game.is_in_check(curr_board, not game.is_red_move())
         if opponent_in_check:
             valid_moves = game.get_valid_moves()
             if not valid_moves:
-                checkmate_reward = 5.0 * decay_factor_early
-                reward += checkmate_reward
-                logging.debug(f"Checkmate achieved, Reward += {checkmate_reward}")
+                reward += 5.0 * decay_factor_early
+                logging.debug(f"Checkmate achieved, Reward += 5.0")
             else:
                 num_escape_moves = len(valid_moves)
-                check_reward = min(3.0, 2.0 / (num_escape_moves + 1)) * decay_factor_late
+                check_reward = min(2.0, 1.5 / (num_escape_moves + 1)) * decay_factor_late
                 reward += check_reward
                 logging.debug(f"Check on opponent, Escape moves: {num_escape_moves}, Reward += {check_reward}")
-        if game.is_in_check(curr_board, game.is_red_move()):
-            check_penalty = 2.0 * decay_factor_early
-            reward -= check_penalty
-            logging.debug(f"Check on self, Reward -= {check_penalty}")
 
-        # Tính giá trị quân cờ và kiểm soát không gian
+        self_in_check = game.is_in_check(curr_board, game.is_red_move())
+        if not self_in_check:
+            reward += 0.5 * decay_factor_early
+            logging.debug(f"King safe, Reward += 0.5")
+        else:
+            valid_moves = game.get_valid_moves()
+            if valid_moves:
+                reward += 1.0 * decay_factor_early / (len(valid_moves) + 1)
+                logging.debug(f"Escaped check with {len(valid_moves)} moves, Reward += {1.0 / (len(valid_moves) + 1)}")
+
         piece_types = ['k', 'r', 'c', 'h', 'e', 'a', 'p']
         prev_counts = {kind: {'red': 0, 'black': 0} for kind in piece_types}
         curr_counts = {kind: {'red': 0, 'black': 0} for kind in piece_types}
-        prev_material = {'red': 0, 'black': 0}
-        curr_material = {'red': 0, 'black': 0}
         prev_pawns_over_river = {'red': 0, 'black': 0}
         curr_pawns_over_river = {'red': 0, 'black': 0}
-        #control_squares = {'red': 0, 'black': 0}
         critical_positions = []
 
+        strategic_count = 0
         for r in range(10):
             for c in range(9):
-                prev_piece = prev_board[r][c]
                 curr_piece = curr_board[r][c]
-                if prev_piece:
-                    side = 'red' if prev_piece.is_red else 'black'
-                    prev_counts[prev_piece.kind][side] += 1
-                    prev_material[side] += abs(PIECE_TO_NUMBER[(prev_piece.kind, prev_piece.is_red)])
-                    if prev_piece.kind == 'p' and ((side == 'red' and r <= 4) or (side == 'black' and r >= 5)):
-                        prev_pawns_over_river[side] += 1
-                if curr_piece:
-                    side = 'red' if curr_piece.is_red else 'black'
-                    curr_counts[curr_piece.kind][side] += 1
-                    curr_material[side] += abs(PIECE_TO_NUMBER[(curr_piece.kind, curr_piece.is_red)])
-                    if curr_piece.kind == 'p' and ((side == 'red' and r <= 4) or (side == 'black' and r >= 5)):
-                        curr_pawns_over_river[side] += 1
-                    if curr_piece.kind in ['r', 'c', 'h'] and curr_piece.is_red == game.is_red_move():
-                        critical_positions.append((r, c))
-                    # Phần thưởng vị trí chiến lược
+                if curr_piece and strategic_count < 3:
                     if curr_piece.kind in ['r', 'c', 'h'] and 3 <= c <= 5 and 3 <= r <= 7:
-                        position_reward = 0.7 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.7 * decay_factor_late
-                        reward += position_reward
-                        logging.debug(f"Critical piece in center, Reward += {position_reward}")
+                        reward += 0.1 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.1 * decay_factor_late
+                        strategic_count += 1
+                        logging.debug(f"Critical piece in center, Reward += {0.1 * decay_factor_late}")
                     if curr_piece.kind in ['a', 'e'] and 3 <= c <= 5 and (r <= 2 or r >= 7):
-                        position_reward = 0.5 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.5 * decay_factor_late
-                        reward += position_reward
-                        logging.debug(f"Advisor/elephant in center, Reward += {position_reward}")
+                        reward += 0.05 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.05 * decay_factor_late
+                        strategic_count += 1
+                        logging.debug(f"Advisor/elephant in center, Reward += {0.05 * decay_factor_late}")
                     if curr_piece.kind in ['r', 'c', 'h'] and ((r <= 2 and not curr_piece.is_red) or (r >= 7 and curr_piece.is_red)):
-                        position_reward = 0.8 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.8 * decay_factor_late
-                        reward += position_reward
-                        logging.debug(f"Critical piece in opponent half, Reward += {position_reward}")
+                        reward += 0.15 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.15 * decay_factor_late
+                        strategic_count += 1
+                        logging.debug(f"Critical piece in opponent half, Reward += {0.15 * decay_factor_late}")
+                if strategic_count >= 3:
+                    break
+            if strategic_count >= 3:
+                break
 
-
-        if game.is_red_move():
-            new_pawns_over_river = curr_pawns_over_river['red'] - prev_pawns_over_river['red']
-            if new_pawns_over_river > 0:
-                pawn_reward = 0.4 * decay_factor_early * new_pawns_over_river
-                reward += pawn_reward
-                logging.debug(f"Red pawn crossed river, Reward += {pawn_reward}")
-        else:
-            new_pawns_over_river = curr_pawns_over_river['black'] - prev_pawns_over_river['black']
-            if new_pawns_over_river > 0:
-                pawn_reward = 0.4 * decay_factor_early * new_pawns_over_river
-                reward += pawn_reward
-                logging.debug(f"Black pawn crossed river, Reward += {pawn_reward}")
-
-        # Phần thưởng và phạt cho ăn quân
         for kind in piece_types:
             value = abs(PIECE_TO_NUMBER[(kind, True)])
             if game.is_red_move():
                 captured = prev_counts[kind]['black'] - curr_counts[kind]['black']
                 if captured > 0:
-                    capture_reward = min(3.0, np.log(1 + value)) * captured * decay_factor_early
-                    reward += capture_reward
-                    logging.debug(f"Red captured {captured} {kind}, Reward += {capture_reward}")
-                lost = prev_counts[kind]['red'] - curr_counts[kind]['red']
-                if lost > 0:
-                    lost_penalty = np.log(1 + value) * lost * decay_factor_early
-                    reward -= lost_penalty
-                    logging.debug(f"Red lost {lost} {kind}, Reward -= {lost_penalty}")
+                    reward += min(2.0, np.log(1 + value)) * captured * decay_factor_early
+                    logging.debug(f"Red captured {captured} {kind}, Reward += {min(2.0, np.log(1 + value)) * captured}")
             else:
                 captured = prev_counts[kind]['red'] - curr_counts[kind]['red']
                 if captured > 0:
-                    capture_reward = min(3.0, np.log(1 + value)) * captured * decay_factor_early
-                    reward += capture_reward
-                    logging.debug(f"Black captured {captured} {kind}, Reward += {capture_reward}")
-                lost = prev_counts[kind]['black'] - curr_counts[kind]['black']
-                if lost > 0:
-                    lost_penalty = np.log(1 + value) * lost * decay_factor_early
-                    reward -= lost_penalty
-                    logging.debug(f"Black lost {lost} {kind}, Reward -= {lost_penalty}")
+                    reward += min(2.0, np.log(1 + value)) * captured * decay_factor_early
+                    logging.debug(f"Black captured {captured} {kind}, Reward += {min(2.0, np.log(1 + value)) * captured}")
 
-        # Phần thưởng bảo vệ Tướng
-        king_safe = 0
-        for r in range(10):
-            for c in range(9):
-                piece = curr_board[r][c]
-                if piece and piece.kind == 'k' and piece.is_red == game.is_red_move():
-                    advisors = sum(1 for dr, dc in [(0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-                                if 0 <= r + dr < 10 and 0 <= c + dc < 9 and
-                                curr_board[r + dr][c + dc] and
-                                curr_board[r + dr][c + dc].kind == 'a' and
-                                curr_board[r + dr][c + dc].is_red == piece.is_red)
-                    elephants = sum(1 for dr, dc in [(2, 2), (2, -2), (-2, 2), (-2, -2)]
-                                    if 0 <= r + dr < 10 and 0 <= c + dc < 9 and
-                                    curr_board[r + dr][c + dc] and
-                                    curr_board[r + dr][c + dc].kind == 'e' and
-                                    curr_board[r + dr][c + dc].is_red == piece.is_red)
-                    king_safe = (advisors * 0.5 + elephants * 0.3) * decay_factor_late
-                    reward += king_safe
-                    logging.debug(f"King safety: Advisors={advisors}, Elephants={elephants}, Reward += {king_safe}")
+        side = 'red' if game.is_red_move() else 'black'
+        new_pawns_over_river = curr_pawns_over_river[side] - prev_pawns_over_river[side]
+        if new_pawns_over_river > 0:
+            reward += 0.1 * new_pawns_over_river * decay_factor_late
+            logging.debug(f"{side} has {new_pawns_over_river} new pawns over river, Reward += {0.1 * new_pawns_over_river}")
 
-        # Chuẩn hóa phần thưởng
-        if abs(reward) > 10.0:
-            logging.warning(f"Abnormal reward detected: {reward}, clamping to ±10.0")
-            reward = np.sign(reward) * 10.0
-        logging.debug(f"Final calculated reward: {reward}, Early decay: {decay_factor_early}, Late decay: {decay_factor_late}")
+        coordination_reward = False
+        for pos1 in critical_positions:
+            for pos2 in critical_positions:
+                if pos1 != pos2 and curr_board[pos1[0]][pos1[1]].kind == 'r' and curr_board[pos2[0]][pos2[1]].kind == 'h':
+                    reward += 0.2 * decay_factor_late
+                    coordination_reward = True
+                    logging.debug(f"Rook-horse coordination detected, Reward += 0.2")
+                    break
+            if coordination_reward:
+                break
+
+        if abs(reward) > 8.0:
+            logging.warning(f"Reward capped: {reward}, clamping to ±8.0")
+            reward = np.sign(reward) * 8.0
+        logging.debug(f"Final reward: {reward}, Early decay: {decay_factor_early}, Late decay: {decay_factor_late}")
         return reward
 
     def save_experience(self, state, action, reward, next_state):
@@ -568,82 +536,152 @@ class ChessAgent:
             self.replay_buffer.pop(0)
         logging.debug(f"Saved experience: Action={action}, Reward={reward}, Buffer size={len(self.replay_buffer)}")
 
-    def create_critical_position(self):
-        game = ChessGame()
-        valid_moves = game.get_valid_moves()
-        if not valid_moves:
-            logging.error("No valid moves for critical position")
-            return None
-        fen = self.board_to_fen(game)
-        if not self.validate_fen(fen):
-            logging.error(f"Invalid FEN in create_critical_position: {fen}")
-            return None
-        api_moves = self.fetch_moves_from_cdb(fen)
-        converted_moves = [self.convert_cdb_move_to_game_format(move, game) for move in api_moves]
-        valid_api_moves = [move for move in converted_moves if move]
-        if not valid_api_moves:
-            logging.warning("No valid API moves for critical position, using opening moves")
-            valid_api_moves = [move for move in self.opening_moves if move in valid_moves]
+    def is_move_stalemate(self, game, move):
+        temp_game = game.copy_and_make_move(move)
+        opponent_moves = temp_game.get_valid_moves()
+        return len(opponent_moves) == 0 and not temp_game.is_in_check(temp_game.get_board(), not temp_game.is_red_move())
+
+    def create_critical_position(self, max_attempts=5):
+        for attempt in range(max_attempts):
+            logging.info(f"Attempt {attempt + 1} to create critical position")
+            game = ChessGame()
+            valid_moves = game.get_valid_moves()
+            if not valid_moves:
+                logging.error("No valid moves for initial position")
+                continue
+            fen = self.board_to_fen(game)
+            if not self.validate_fen(fen):
+                logging.error(f"Invalid FEN: {fen}")
+                continue
+
+            api_moves = self.fetch_moves_from_cdb(fen)
+            logging.info(f"Retrieved {len(api_moves)} moves from ChessDB for FEN: {fen}")
+
+            converted_moves_with_priors = []
+            for move, prior in api_moves:
+                converted_move = self.convert_cdb_move_to_game_format(move, game)
+                if converted_move:
+                    converted_moves_with_priors.append((converted_move, prior))
+                else:
+                    logging.debug(f"Failed to convert API move: {move}")
+
+            valid_api_moves = [move for move, prior in converted_moves_with_priors if move]
             if not valid_api_moves:
-                logging.warning("No valid opening moves, using policy network")
+                logging.warning("No valid API moves, using opening moves")
+                valid_api_moves = [move for move in self.opening_moves if move in valid_moves]
+                if not valid_api_moves:
+                    logging.warning("No valid opening moves, using policy network")
+                    state = self.board_to_tensor(game)
+                    with torch.no_grad():
+                        probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+                    legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+                    legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+                    valid_api_moves = valid_moves
+
+            logging.info(f"Starting simulation with {len(valid_api_moves)} valid moves")
+            for i in range(10):
+                if not valid_api_moves or game.get_winner():
+                    logging.warning(f"Simulation stopped: No valid moves or game ended with winner: {game.get_winner()}")
+                    break
+
+                valid_api_moves = [move for move in valid_api_moves if not self.is_move_stalemate(game, move)]
+                if not valid_api_moves:
+                    logging.warning("All API moves lead to stalemate, using policy network")
+                    valid_moves = game.get_valid_moves()
+                    if not valid_moves:
+                        logging.warning("No valid moves available")
+                        break
+                    state = self.board_to_tensor(game)
+                    with torch.no_grad():
+                        probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+                    legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+                    legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+                    valid_api_moves = [move for move in valid_moves if not self.is_move_stalemate(game, move)]
+                    if not valid_api_moves:
+                        logging.warning("All policy network moves lead to stalemate")
+                        break
+                    legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_api_moves]
+                    legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+
                 state = self.board_to_tensor(game)
                 with torch.no_grad():
                     probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
-                legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+                legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_api_moves]
                 legal_probs = np.array(legal_probs) / np.sum(legal_probs)
-                valid_api_moves = valid_moves
-        logging.info(f"Creating critical position with {len(valid_api_moves)} moves")
-        for i in range(10):  # Giới hạn tối đa 10 nước đi
-            if not valid_api_moves or game.get_winner():
-                logging.warning("No valid moves or game ended, stopping simulation")
-                break
-            move = random.choice(valid_api_moves)
-            prev_board = game.get_board()
-            game = game.copy_and_make_move(move)
-            reward = self.calculate_reward(game, prev_board, game.get_board())
-            if abs(reward) >= 1.0 or game.is_in_check(game.get_board(), not game.is_red_move()):
-                logging.info(f"Critical move: {move}, Reward: {reward}")
-                break
-            fen = self.board_to_fen(game)
-            if not self.validate_fen(fen):
-                logging.error(f"Invalid FEN after move {move}: {fen}")
-                return None
-            api_moves = self.fetch_moves_from_cdb(fen)
-            converted_moves = [self.convert_cdb_move_to_game_format(move, game) for move in api_moves]
-            valid_api_moves = [move for move in converted_moves if move]
-            if not valid_api_moves:
-                logging.warning("API failed in loop, using opening moves or random")
-                valid_moves = game.get_valid_moves()
-                if not valid_moves:
+                move = np.random.choice(valid_api_moves, p=legal_probs)
+
+                prev_board = game.get_board()
+                game = game.copy_and_make_move(move)
+                reward = self.calculate_reward(game, prev_board, game.get_board())
+                if abs(reward) >= 1.0 or game.is_in_check(game.get_board(), not game.is_red_move()):
+                    logging.info(f"Critical move found: {move}, Reward: {reward}")
                     break
-                valid_api_moves = [move for move in self.opening_moves if move in valid_moves]
+
+                fen = self.board_to_fen(game)
+                if not self.validate_fen(fen):
+                    logging.error(f"Invalid FEN after move {move}: {fen}")
+                    break
+
+                api_moves = self.fetch_moves_from_cdb(fen)
+                logging.info(f"Retrieved {len(api_moves)} moves from ChessDB for FEN: {fen}")
+                converted_moves_with_priors = []
+                for move, prior in api_moves:
+                    converted_move = self.convert_cdb_move_to_game_format(move, game)
+                    if converted_move:
+                        converted_moves_with_priors.append((converted_move, prior))
+                    else:
+                        logging.debug(f"Failed to convert API move: {move}")
+
+                valid_api_moves = [move for move, prior in converted_moves_with_priors if move]
                 if not valid_api_moves:
-                    valid_api_moves = valid_moves
-        state = self.board_to_tensor(game)
-        valid_moves = game.get_valid_moves()
-        if not valid_moves:
-            logging.error("No valid moves for final critical position")
-            return None
-        if valid_api_moves:
-            move = random.choice(valid_api_moves)
-        else:
-            logging.warning("No API moves for final position, using policy network")
+                    logging.warning("No valid API moves, using opening moves")
+                    valid_moves = game.get_valid_moves()
+                    if not valid_moves:
+                        logging.warning("No valid moves available")
+                        break
+                    valid_api_moves = [move for move in self.opening_moves if move in valid_moves]
+                    if not valid_api_moves:
+                        logging.warning("No valid opening moves, using policy network")
+                        state = self.board_to_tensor(game)
+                        with torch.no_grad():
+                            probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+                        legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+                        legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+                        valid_api_moves = [move for move in valid_moves if not self.is_move_stalemate(game, move)]
+                        if not valid_api_moves:
+                            logging.warning("All policy network moves lead to stalemate")
+                            break
+                        legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_api_moves]
+                        legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+
+            state = self.board_to_tensor(game)
+            valid_moves = game.get_valid_moves()
+            if not valid_moves:
+                logging.error("No valid moves for final critical position")
+                continue
+
             with torch.no_grad():
                 probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
             legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
             legal_probs = np.array(legal_probs) / np.sum(legal_probs)
             move = valid_moves[np.random.choice(len(valid_moves), p=legal_probs)]
-        action_idx = self.encode_move(move, valid_moves)
-        next_game = game.copy_and_make_move(move)
-        next_state = self.board_to_tensor(next_game)
-        reward = self.calculate_reward(next_game, game.get_board(), next_game.get_board())
-        if next_game.is_in_check(next_game.get_board(), not next_game.is_red_move()):
-            reward = 8.0
-            logging.info(f"Critical position created with check, Reward: {reward}, Move: {move}")
-        with torch.no_grad():
-            value = self.value_network(state.unsqueeze(0)).cpu().numpy()[0].item()
-            logging.info(f"Critical position: FEN={fen}, Move={move}, Reward={reward}, Value prediction={value}")
-        return (state, action_idx, reward, next_state)
+            action_idx = self.encode_move(move, valid_moves)
+            next_game = game.copy_and_make_move(move)
+            next_state = self.board_to_tensor(next_game)
+            reward = self.calculate_reward(next_game, game.get_board(), next_game.get_board())
+
+            if next_game.is_in_check(next_game.get_board(), not next_game.is_red_move()):
+                reward = 5.0
+                logging.info(f"Critical position created with check, Reward: {reward}, Move: {move}")
+
+            with torch.no_grad():
+                value = self.value_network(state.unsqueeze(0)).cpu().numpy()[0].item()
+                logging.info(f"Critical position created: FEN={fen}, Move={move}, Reward={reward}, Value prediction={value}")
+
+            return (state, action_idx, reward, next_state)
+
+        logging.error(f"Failed to create critical position after {max_attempts} attempts")
+        return None
 
     def set_training_mode(self, mode=True):
         self.policy_network.train(mode)
@@ -656,7 +694,7 @@ class ChessAgent:
             return
         batch_size = min(batch_size, len(self.replay_buffer))
         self_play = []
-        len_self_play = int(batch_size * 0.2)  # Tăng tỷ lệ dữ liệu tổng hợp
+        len_self_play = int(batch_size * 0.2)
         for _ in range(len_self_play):
             result = self.create_critical_position()
             if result:
@@ -687,7 +725,7 @@ class ChessAgent:
         policy_output = self.policy_network(state_batch)
         action_prob = policy_output.gather(1, action_batch.view(-1, 1)).squeeze()
         action_prob = torch.clamp(action_prob, 1e-10, 1.0)
-        policy_loss = -torch.mean(torch.log(action_prob) * (reward_batch.abs() + 1.0))  # Tăng trọng số cho phần thưởng lớn
+        policy_loss = -torch.mean(torch.log(action_prob) * reward_batch)
         self.value_optimizer.zero_grad()
         value_output = self.value_network(state_batch).squeeze()
         value_loss = nn.MSELoss()(value_output, reward_batch)
@@ -727,68 +765,65 @@ class ChessAgent:
     def print_board(self, game):
         print_board(game.get_board())
 
-    def get_move(self, game, simulations=5000, c_puct=2.0):  # Tăng simulations lên 5000
-        if self.api_fail_count > self.api_fail_threshold:
-            logging.warning(f"API failed {self.api_fail_count} times, switching to opening moves or policy network")
-            valid_moves = game.get_valid_moves()
-            if not valid_moves:
-                logging.info("No valid moves available!")
-                return None
-            opening_moves = [move for move in self.opening_moves if move in valid_moves]
-            if opening_moves:
-                return random.choice(opening_moves)
-            state = self.board_to_tensor(game)
-            with torch.no_grad():
-                probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
-            legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
-            legal_probs = np.array(legal_probs) / np.sum(legal_probs)
-            return valid_moves[np.random.choice(len(valid_moves), p=legal_probs)]
-
-        root = MCTSNode(game)
+    def get_move(self, game, simulations=10000, c_puct=2.0):
         valid_moves = game.get_valid_moves()
         logging.info(f"Valid moves generated: {len(valid_moves)} moves")
         if not valid_moves:
             logging.info("No valid moves available!")
             return None
-        fen = self.board_to_fen(game)
-        if not self.validate_fen(fen):
-            logging.error(f"Invalid FEN generated: {fen}")
-            return None
-        api_moves_with_priors = self.fetch_moves_from_cdb(fen, max_retries=10)
-        logging.info(f"Retrieved {len(api_moves_with_priors)} moves from ChessDB API")
 
-        converted_moves_with_priors = []
-        for move, prior in api_moves_with_priors:
-            converted_move = self.convert_cdb_move_to_game_format(move, game)
-            if converted_move:
-                converted_moves_with_priors.append((converted_move, prior))
-        if not converted_moves_with_priors:
-            logging.warning(f"No valid moves from API after 10 retries, using opening moves or policy network")
-            opening_moves = [move for move in self.opening_moves if move in valid_moves]
-            if opening_moves:
-                return random.choice(opening_moves)
-            state = self.board_to_tensor(game)
-            with torch.no_grad():
-                probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
-            legal_probs = [probs[self.encode_move(move, valid_moves)] for move in valid_moves]
-            legal_probs = np.array(legal_probs) / np.sum(legal_probs)
-            return valid_moves[np.random.choice(len(valid_moves), p=legal_probs)]
-
-        # Kết hợp xác suất từ API và PolicyNetwork
+        root = MCTSNode(game)
         state = self.board_to_tensor(game)
-        with torch.no_grad():
-            policy_probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
-        for i, (move, prior) in enumerate(converted_moves_with_priors):
-            move_idx = self.encode_move(move, valid_moves)
-            converted_moves_with_priors[i] = (move, 0.5 * prior + 0.5 * policy_probs[move_idx])
-        moves, priors = zip(*converted_moves_with_priors)
-        priors = np.array(priors) / np.sum(priors)
-        logging.info(f"API moves and priors: {list(zip(moves, priors))}")
+
+        if not self.use_api or self.api_fail_count > self.api_fail_threshold:
+            logging.info("Using policy network for move selection (API disabled or failed)")
+            with torch.no_grad():
+                policy_probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+            legal_probs = [policy_probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+            legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+            moves = valid_moves
+            priors = legal_probs
+        else:
+            logging.info("Using ChessDB API for move selection")
+            fen = self.board_to_fen(game)
+            if not self.validate_fen(fen):
+                logging.error(f"Invalid FEN generated: {fen}")
+                return None
+            api_moves_with_priors = self.fetch_moves_from_cdb(fen, max_retries=10)
+            logging.info(f"Retrieved {len(api_moves_with_priors)} moves from ChessDB API")
+
+            converted_moves_with_priors = []
+            for move, prior in api_moves_with_priors:
+                converted_move = self.convert_cdb_move_to_game_format(move, game)
+                if converted_move:
+                    converted_moves_with_priors.append((converted_move, prior))
+            if not converted_moves_with_priors:
+                logging.warning("No valid moves from API, using opening moves or policy network")
+                opening_moves = [move for move in self.opening_moves if move in valid_moves]
+                if opening_moves:
+                    return random.choice(opening_moves)
+                with torch.no_grad():
+                    policy_probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+                legal_probs = [policy_probs[self.encode_move(move, valid_moves)] for move in valid_moves]
+                legal_probs = np.array(legal_probs) / np.sum(legal_probs)
+                moves = valid_moves
+                priors = legal_probs
+            else:
+                with torch.no_grad():
+                    policy_probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
+                for i, (move, prior) in enumerate(converted_moves_with_priors):
+                    move_idx = self.encode_move(move, valid_moves)
+                    converted_moves_with_priors[i] = (move, 0.6 * prior + 0.4 * policy_probs[move_idx])
+                moves, priors = zip(*converted_moves_with_priors)
+                priors = np.array(priors) / np.sum(priors)
+
+        logging.info(f"Moves and priors: {list(zip(moves, priors))}")
         root.expand(moves, priors)
         for sim in range(simulations):
             node = root
             sim_game = copy.deepcopy(game)
             action_path = []
+            bonus_score = 0.0
             while node.children:
                 move = node.select(c=c_puct)
                 if move is None:
@@ -796,6 +831,8 @@ class ChessAgent:
                 action_path.append((node, move))
                 node = node.children[move]
                 sim_game = sim_game.copy_and_make_move(move)
+                if sim_game.is_in_check(sim_game.get_board(), not sim_game.is_red_move()):
+                    bonus_score = max(bonus_score, 0.5)
             if not sim_game.get_winner():
                 valid_moves = sim_game.get_valid_moves()
                 if valid_moves:
@@ -814,13 +851,14 @@ class ChessAgent:
                 value = self.calculate_reward(sim_game, prev_board, curr_board)
                 with torch.no_grad():
                     value_pred = self.value_target_network(self.board_to_tensor(sim_game).unsqueeze(0)).cpu().numpy()[0].item()
-                value = 0.5 * value + 0.5 * value_pred
+                value = min(0.5 * value + 0.5 * value_pred + bonus_score, 8.0)
                 logging.debug(f"MCTS simulation: Move={move}, Reward={value}, Value prediction={value_pred}")
             else:
                 winner = sim_game.get_winner()
                 value = 1.0 if (winner == 'Red' and game.is_red_move()) or (winner == 'Black' and not game.is_red_move()) else -1.0
                 if winner == 'Draw':
                     value = 0.0
+                value = min(value + bonus_score, 8.0)
                 logging.debug(f"MCTS simulation ended with winner: {winner}, Value={value}")
             for parent_node, move in action_path:
                 parent_node.update(move, value)
@@ -831,7 +869,6 @@ class ChessAgent:
         if best_move not in api_move_list:
             logging.warning(f"MCTS selected move {best_move} not in API moves, choosing random API move")
             best_move = random.choice(api_move_list)
-        # Lưu nước đi vào move_history
         self.move_history.append((best_move, None))
         if len(self.move_history) > 10:
             self.move_history.pop(0)
@@ -867,13 +904,35 @@ class ChessAgent:
         else:
             logging.info(f"Simulation ended without winner, Value: {value}")
         return value
-    
+
     def reset_api_fail_count(self):
         self.api_fail_count = 0
         logging.info("Reset API fail count")
 
-def train_game(num_games=1000, batch_size=1028, simulations=2000):
-    agent = ChessAgent(state_size=(10, 9), action_size=4000)
+def train_game(num_games=1000, batch_size=1028, simulations=10000):
+    agent = ChessAgent(state_size=(10, 9), action_size=4000, use_api=True)  # Sử dụng API khi huấn luyện
+    model_path = "trained_models/chinese_chess_alpha.pth"
+    if os.path.exists(model_path):
+        try:
+            checkpoint = torch.load(model_path, map_location=agent.device)
+            if isinstance(checkpoint, dict):
+                logging.info(f"Loading model from {model_path}")
+                agent.policy_network.load_state_dict(checkpoint["policy_network"])
+                agent.value_network.load_state_dict(checkpoint["value_network"])
+                agent.policy_target_network.load_state_dict(checkpoint["policy_network"])
+                agent.value_target_network.load_state_dict(checkpoint["value_network"])
+                agent.gamma = checkpoint.get("gamma", agent.gamma)
+                agent.epsilon = checkpoint.get("epsilon", agent.epsilon)
+                agent.epsilon_min = checkpoint.get("epsilon_min", agent.epsilon_min)
+                agent.epsilon_decay = checkpoint.get("epsilon_decay", agent.epsilon_decay)
+                agent.learning_rate = checkpoint.get("learning_rate", agent.learning_rate)
+                logging.info("Successfully loaded model and parameters")
+            else:
+                logging.warning("Checkpoint is not a dictionary, skipping model loading")
+        except Exception as e:
+            logging.error(f"Failed to load model from {model_path}: {e}")
+    else:
+        logging.info(f"No model found at {model_path}, starting training from scratch")
     for game_idx in range(num_games):
         env = ChessGame()
         agent.reset_api_fail_count()
@@ -922,31 +981,218 @@ def train_game(num_games=1000, batch_size=1028, simulations=2000):
         agent.train_main_network(batch_size=batch_size)
         agent.save()
 
-def test():
-    board = [
-        [_Piece('r', False), _Piece('h', False), _Piece('e', False), _Piece('a', False), _Piece('k', False), _Piece('a', False), _Piece('e', False), _Piece('h', False), _Piece('r', False)],
-        [None for _ in range(0, 9)],
-        [None, _Piece('c', False), None, None, None, _Piece('c', False), None, None, None],
-        [_Piece('p', False), None, _Piece('p', False), None, _Piece('p', False), None, _Piece('p', False), None, _Piece('p', False)],
-        [None for _ in range(0, 9)],
-        [None, None, _Piece('p', True), None, None, None, _Piece('p', True), None, None],
-        [_Piece('p', True), None, None, None, _Piece('p', True), None, None, None, _Piece('p', True)],
-        [None, _Piece('c', True), None, None, None, None, None, _Piece('c', True), None],
-        [None for _ in range(0, 9)],
-        [_Piece('r', True), _Piece('h', True), _Piece('e', True), _Piece('a', True), _Piece('k', True), _Piece('a', True), _Piece('e', True), _Piece('h', True), _Piece('r', True)],
-    ]
-    game = ChessGame(board=board, red_active=False)
-    agent = ChessAgent()
-    moves = game.get_valid_moves()
-    fen = agent.board_to_fen(game)
-    game.__str__()
-    logging.info(f"Test board FEN: {fen}")
-    logging.info(f"Test moves size: {len(moves)}")
-    logging.info(f"Test moves: {moves}")
-    api = agent.fetch_moves_from_cdb(fen)
-    api_moves = [(agent.convert_cdb_move_to_game_format(move, game), 1.0 / len(api)) for move in api if agent.convert_cdb_move_to_game_format(move, game)]
-    logging.info(f"Test API moves: {api_moves}")
+def normalize_move(move: str) -> str:
+    """Chuẩn hóa nước đi bằng cách chuyển ký tự đầu thành chữ thường."""
+    if not move or len(move) < 4:
+        return move
+    piece = move[0].lower()
+    rest = move[1:]
+    return piece + rest
+
+def is_valid_wxf_move(move: str) -> bool:
+    """Kiểm tra xem nước đi có đúng định dạng WXF không."""
+    if not move or len(move) < 4:
+        return False
+    pattern = r'^[rheakcnp][1-9][.+-][1-9]$'
+    return bool(re.match(pattern, move, re.IGNORECASE))
+
+def train_with_dataset(dataset_files = ['dataset/moves.csv'], batch_size = 1028):
+    """
+    Huấn luyện ChessAgent sử dụng tập dữ liệu từ các file CSV.
+
+    Args:
+        dataset_files: Danh sách các file CSV chứa dữ liệu ván cờ.
+        batch_size: Kích thước batch để huấn luyện mạng nơ-ron.
+    """
+    # Khởi tạo ChessAgent
+    agent = ChessAgent(state_size=(10, 9), action_size=4000, use_api=False)  # Tắt API để tập trung vào dữ liệu CSV
+    logging.info("Bắt đầu huấn luyện với tập dữ liệu")
+
+    for dataset_file in dataset_files:
+        logging.info(f"Đang xử lý tệp tập dữ liệu: {dataset_file}")
+        try:
+            # Đọc file CSV
+            df = pd.read_csv(dataset_file, skipinitialspace=True, dtype={'gameID': str, 'turn': int, 'side': str, 'move': str})
+            df.columns = df.columns.str.strip().str.replace('"', '').str.lower()
+            required_columns = ['gameid', 'turn', 'side', 'move']
+            if not all(col in df.columns for col in required_columns):
+                missing = [col for col in required_columns if col not in df.columns]
+                logging.error(f"Thiếu các cột {missing} trong {dataset_file}")
+                continue
+            df = df[required_columns].dropna()
+            df['side'] = df['side'].str.strip().str.lower()
+            df['move'] = df['move'].str.strip()
+            df['move'] = df['move'].apply(normalize_move)
+            games = df.groupby('gameid')
+            logging.info(f"Tìm thấy {len(games)} ván cờ trong {dataset_file}")
+
+            for game_id, game_moves in games:
+                logging.info(f"Đang xử lý ván cờ {game_id} với {len(game_moves)} nước đi")
+                game = ChessGame()
+                prev_board = game.get_board()
+                move_count = 0
+
+                # Tách nước đi của Đỏ và Đen
+                red_moves = game_moves[game_moves['side'] == 'red'].set_index('turn')
+                black_moves = game_moves[game_moves['side'] == 'black'].set_index('turn')
+
+                red_count = len(red_moves)
+                black_count = len(black_moves)
+                if abs(red_count - black_count) > 1:
+                    logging.warning(f"Ván {game_id} không cân bằng: Đỏ={red_count}, Đen={black_count}")
+
+                max_turn = max(game_moves['turn'])
+                for turn in range(1, max_turn + 1):
+                    # Xử lý nước đi của Đỏ
+                    if turn in red_moves.index and game.is_red_move():
+                        move = red_moves.loc[turn]['move']
+                        if not is_valid_wxf_move(move):
+                            logging.warning(f"Nước đi {move} tại lượt {turn} (đỏ) trong ván {game_id} không đúng định dạng WXF")
+                            continue
+
+                        valid_moves = game.get_valid_moves()
+                        if not valid_moves:
+                            logging.error(f"Danh sách nước đi hợp lệ rỗng tại lượt {turn} (đỏ) trong ván {game_id}")
+                            print_board(game.get_board())
+                            winner = game.get_winner()
+                            if winner:
+                                final_reward = 8.0 if winner == 'Red' else -8.0 if winner == 'Black' else 0.0
+                                agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
+                                logging.info(f"Ván cờ {game_id} kết thúc với người thắng: {winner}, Phần thưởng cuối cùng: {final_reward}")
+                            break
+
+                        logging.debug(f"Các nước đi hợp lệ cho đỏ: {valid_moves}")
+                        if move not in valid_moves:
+                            logging.warning(f"Nước đi {move} tại lượt {turn} (đỏ) trong ván {game_id} không hợp lệ")
+                            continue
+
+                        try:
+                            # Lưu trạng thái hiện tại
+                            state = agent.board_to_tensor(game)
+                            action_idx = agent.encode_move(move, valid_moves)
+                            # Thực hiện nước đi
+                            env = game.copy_and_make_move(move)
+                            curr_board = env.get_board()
+                            # Tính phần thưởng
+                            reward = agent.calculate_reward(env, prev_board, curr_board)
+                            next_state = agent.board_to_tensor(env)
+                            # Lưu trải nghiệm
+                            agent.save_experience(state, action_idx, reward, next_state)
+                            logging.debug(f"Đã lưu trải nghiệm (đỏ): Nước đi={move}, Phần thưởng={reward}, Kích thước bộ đệm={len(agent.replay_buffer)}")
+                            # Cập nhật trạng thái trò chơi
+                            game = env
+                            prev_board = curr_board
+                            move_count += 1
+                        except Exception as e:
+                            logging.error(f"Không thể áp dụng nước đi {move} (đỏ) trong ván {game_id}: {str(e)}")
+                            continue
+
+                    elif turn in red_moves.index and not game.is_red_move():
+                        logging.warning(f"Nước đi {red_moves.loc[turn]['move']} tại lượt {turn} trong ván {game_id} không khớp với người chơi hiện tại (đen)")
+                        continue
+                    elif turn not in red_moves.index and game.is_red_move():
+                        logging.warning(f"Thiếu nước đi của đỏ tại lượt {turn} trong ván {game_id}")
+                        break
+
+                    # Kiểm tra người thắng
+                    winner = game.get_winner()
+                    if winner:
+                        final_reward = 8.0 if winner == 'Red' else -8.0 if winner == 'Black' else 0.0
+                        agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
+                        logging.info(f"Ván cờ {game_id} kết thúc với người thắng: {winner}, Phần thưởng cuối cùng: {final_reward}")
+                        break
+
+                    # Xử lý nước đi của Đen
+                    if turn in black_moves.index and not game.is_red_move():
+                        move = black_moves.loc[turn]['move']
+                        if not is_valid_wxf_move(move):
+                            logging.warning(f"Nước đi {move} tại lượt {turn} (đen) trong ván {game_id} không đúng định dạng WXF")
+                            continue
+
+                        valid_moves = game.get_valid_moves()
+                        if not valid_moves:
+                            logging.error(f"Danh sách nước đi hợp lệ rỗng tại lượt {turn} (đen) trong ván {game_id}")
+                            print_board(game.get_board())
+                            winner = game.get_winner()
+                            if winner:
+                                final_reward = 8.0 if winner == 'Red' else -8.0 if winner == 'Black' else 0.0
+                                agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
+                                logging.info(f"Ván cờ {game_id} kết thúc với người thắng: {winner}, Phần thưởng cuối cùng: {final_reward}")
+                            break
+
+                        logging.debug(f"Các nước đi hợp lệ cho đen: {valid_moves}")
+                        if move not in valid_moves:
+                            logging.warning(f"Nước đi {move} tại lượt {turn} (đen) trong ván {game_id} không hợp lệ")
+                            continue
+
+                        try:
+                            # Lưu trạng thái hiện tại
+                            state = agent.board_to_tensor(game)
+                            action_idx = agent.encode_move(move, valid_moves)
+                            # Thực hiện nước đi
+                            env = game.copy_and_make_move(move)
+                            curr_board = env.get_board()
+                            # Tính phần thưởng
+                            reward = agent.calculate_reward(env, prev_board, curr_board)
+                            next_state = agent.board_to_tensor(env)
+                            # Lưu trải nghiệm
+                            agent.save_experience(state, action_idx, reward, next_state)
+                            logging.debug(f"Đã lưu trải nghiệm (đen): Nước đi={move}, Phần thưởng={reward}, Kích thước bộ đệm={len(agent.replay_buffer)}")
+                            # Cập nhật trạng thái trò chơi
+                            game = env
+                            prev_board = curr_board
+                            move_count += 1
+                        except Exception as e:
+                            logging.error(f"Không thể áp dụng nước đi {move} (đen) trong ván {game_id}: {str(e)}")
+                            continue
+
+                    elif turn in black_moves.index and game.is_red_move():
+                        logging.warning(f"Nước đi {black_moves.loc[turn]['move']} tại lượt {turn} trong ván {game_id} không khớp với người chơi hiện tại (đỏ)")
+                        continue
+                    elif turn not in black_moves.index and not game.is_red_move():
+                        logging.warning(f"Thiếu nước đi của đen tại lượt {turn} trong ván {game_id}")
+                        break
+
+                    # Kiểm tra người thắng
+                    winner = game.get_winner()
+                    if winner:
+                        final_reward = 8.0 if winner == 'Red' else -8.0 if winner == 'Black' else 0.0
+                        agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
+                        logging.info(f"Ván cờ {game_id} kết thúc với người thắng: {winner}, Phần thưởng cuối cùng: {final_reward}")
+                        break
+
+                # Xác định người thắng dựa trên số nước đi (nếu không có người thắng rõ ràng)
+                if not winner and move_count > 0:
+                    if move_count % 2 == 1:  # Đỏ đi cuối
+                        final_reward = 8.0 if game.is_red_move() else -8.0
+                        winner = 'Red'
+                    else:  # Đen đi cuối
+                        final_reward = 8.0 if not game.is_red_move() else -8.0
+                        winner = 'Black'
+                    agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
+                    logging.info(f"Ván cờ {game_id} kết thúc với người thắng (dựa trên số nước đi): {winner}, Phần thưởng cuối cùng: {final_reward}")
+
+                # Huấn luyện nếu bộ đệm đủ lớn
+                if len(agent.replay_buffer) >= 64:
+                    agent.train_main_network(batch_size=batch_size)
+                    logging.info(f"Đã huấn luyện mạng với batch_size={batch_size}")
+                else:
+                    logging.info(f"Kích thước bộ đệm replay buffer {len(agent.replay_buffer)} < 64, bỏ qua huấn luyện cho ván {game_id}")
+
+                # Lưu mô hình
+                agent.save()
+
+        except Exception as e:
+            logging.error(f"Lỗi khi xử lý {dataset_file}: {str(e)}")
+            continue
+
+    # Lưu mô hình cuối cùng
+    agent.save()
+    logging.info(f"Hoàn thành huấn luyện. Mô hình được lưu tại trained_models/chinese_chess_alpha.pth")
+    logging.info(f"Kích thước bộ đệm replay buffer cuối cùng: {len(agent.replay_buffer)}")
+    logging.info(f"Thống kê API: Thành công={agent.api_success_count}, Thất bại={agent.api_fail_count}, Tỷ lệ thành công={agent.api_success_count / (agent.api_success_count + agent.api_fail_count + 1e-10):.4f}")
 
 if __name__ == "__main__":
-    train_game(num_games=100000, batch_size=1028, simulations=2000)
-    #test()
+    # Huấn luyện với API
+    #train_game(num_games=100000, batch_size=1028, simulations=8000)
+    train_with_dataset()

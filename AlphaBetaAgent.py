@@ -31,7 +31,7 @@ class AlphaBetaAgent:
             return True
         return False
     
-    def make_move(self, game, prev_move=None):
+    def get_move(self, game, prev_move=None):
         """
         Tìm nước đi tốt nhất sử dụng thuật toán Alpha-Beta.
         
@@ -69,7 +69,7 @@ class AlphaBetaAgent:
         sorted_moves = threatening_moves + capture_moves + non_capture_moves
 
         for move in sorted_moves:
-            new_game = game.copy_and_make_move(move)
+            new_game = game.copy_and_make_move_alphabeta(move)
             value = self.alpha_beta(new_game, depth=self.max_depth - 1, is_max=not is_red, alpha=alpha, beta=beta)
             
             if is_red:
@@ -137,7 +137,7 @@ class AlphaBetaAgent:
         if is_max:  # MAX player (Red)
             max_value = float('-inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move(move)
+                new_game = game.copy_and_make_move_alphabeta(move)
                 value = self.alpha_beta(new_game, depth - 1, False, alpha, beta)
                 max_value = max(max_value, value)
                 alpha = max(alpha, max_value)
@@ -147,7 +147,7 @@ class AlphaBetaAgent:
         else:  # MIN player (Black)
             min_value = float('inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move(move)
+                new_game = game.copy_and_make_move_alphabeta(move)
                 value = self.alpha_beta(new_game, depth - 1, True, alpha, beta)
                 min_value = min(min_value, value)
                 beta = min(beta, min_value)

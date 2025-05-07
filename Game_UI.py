@@ -4,7 +4,7 @@ import Chinese_Chess_Game_Rules
 from Chinese_Chess_Game_Rules import ChessGame, piece_count
 
 class Game:
-    def __init__(self, player, music = False, sfx = False):
+    def __init__(self, player):
         pygame.init()
 
         self.board_width = 720
@@ -12,8 +12,6 @@ class Game:
         self.cell_size = 80
 
         self.opponent = player
-        self.music = music
-        self.sfx = sfx
         self._screen = pygame.display.set_mode((self.board_width, self.board_height))
         self._game = ChessGame()
         self._curr_coord = ()
@@ -68,16 +66,7 @@ class Game:
                 ('a', True): red_advisor, ('k', True): red_king,
                 ('c', True): red_cannon, ('p', True): red_pawn,
                 'board_image': board_image, 'possible_move_frame': possible_move_frame, 'selected_frame': selected_frame}
-
-    # def _load_sound(self):
-    #     check_sound = pygame.mixer.Sound('chessboard/sound/check.wav')
-    #     move_sound = pygame.mixer.Sound('chessboard/sound/move.wav')
-    #     capture_sound = pygame.mixer.Sound('chessboard/sound/capture.wav')
-
-    #     return {'check_sound': check_sound,
-    #             'move_sound': move_sound,
-    #             'capture_sound': capture_sound}
-
+        
     def _define_color(self):
         black = (0, 0, 0)
         red = (255, 0, 0)
@@ -197,9 +186,6 @@ class Game:
             frame_coord = coordinate_to_pixel(coord)
             frame_rect = IMAGE_DICT['possible_move_frame'].get_rect(center=frame_coord)
             self._screen.blit(IMAGE_DICT['possible_move_frame'], frame_rect)
-
-        # if self.sfx:
-        #     SOUND_DICT['check_sound'].play()
 
         self._ready_to_move = True
 

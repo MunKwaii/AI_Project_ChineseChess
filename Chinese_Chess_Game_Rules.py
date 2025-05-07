@@ -85,7 +85,14 @@ class ChessGame:
         new_game = ChessGame(board=new_board,
                              red_active=not self._is_red_active,
                              move_count=self._move_count + 1)
-        #new_game._valid_moves = []
+        new_game._valid_moves = []
+        return new_game
+    
+    def copy_and_make_move_alphabeta(self, move):
+        new_board = self._board_after_move(move, self._is_red_active)
+        new_game = ChessGame(board=new_board,
+                             red_active=not self._is_red_active,
+                             move_count=self._move_count + 1)
         new_game._recalculate_valid_moves()
         return new_game
 

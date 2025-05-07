@@ -22,7 +22,7 @@ class MinimaxAgent:
         self.max_depth = max_depth
         self.nodes_evaluated = 0  
 
-    def make_move(self, game, prev_move=None):
+    def get_move(self, game, prev_move=None):
         """
         Tìm nước đi tốt nhất sử dụng thuật toán Minimax.
         
@@ -60,7 +60,7 @@ class MinimaxAgent:
         sorted_moves = capture_moves + non_capture_moves
 
         for move in sorted_moves:
-            new_game = game.copy_and_make_move(move)
+            new_game = game.copy_and_make_move_alphabeta(move)
             value = self.minimax(new_game, depth=self.max_depth - 1, is_max=not is_red)
             
             if is_red:  # MAX player (Red)
@@ -134,14 +134,14 @@ class MinimaxAgent:
         if is_max:  # MAX player (Red)
             max_value = float('-inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move(move)
+                new_game = game.copy_and_make_move_alphabeta(move)
                 value = self.minimax(new_game, depth - 1, False)
                 max_value = max(max_value, value)
             return max_value
         else:  # MIN player (Black)
             min_value = float('inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move(move)
+                new_game = game.copy_and_make_move_alphabeta(move)
                 value = self.minimax(new_game, depth - 1, True)
                 min_value = min(min_value, value)
             return min_value
