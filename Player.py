@@ -136,7 +136,7 @@ class ChessAgent:
         self.epsilon_decay = 0.995
         self.learning_rate = 0.0001
         self.update_frequency = 10
-        self.use_api = use_api  # Thêm cờ để kiểm soát việc gọi API
+        self.use_api = use_api
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logging.info(f"Using device: {self.device}")
         if self.device.type == "cpu" and torch.cuda.is_available():
@@ -147,7 +147,7 @@ class ChessAgent:
         self.policy_target_network = PolicyNetwork(action_size).to(self.device)
         self.value_target_network = ValueNetwork().to(self.device)
 
-        model_path = "trained_models/chinese_chess.pth"
+        model_path = "trained_models/chinese_chess_alpha.pth"
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path, map_location=self.device)
             if isinstance(checkpoint, dict):
@@ -468,31 +468,6 @@ class ChessAgent:
         piece_types = ['k', 'r', 'c', 'h', 'e', 'a', 'p']
         prev_counts = {kind: {'red': 0, 'black': 0} for kind in piece_types}
         curr_counts = {kind: {'red': 0, 'black': 0} for kind in piece_types}
-        prev_pawns_over_river = {'red': 0, 'black': 0}
-        curr_pawns_over_river = {'red': 0, 'black': 0}
-        critical_positions = []
-
-        strategic_count = 0
-        for r in range(10):
-            for c in range(9):
-                curr_piece = curr_board[r][c]
-                if curr_piece and strategic_count < 3:
-                    if curr_piece.kind in ['r', 'c', 'h'] and 3 <= c <= 5 and 3 <= r <= 7:
-                        reward += 0.1 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.1 * decay_factor_late
-                        strategic_count += 1
-                        logging.debug(f"Critical piece in center, Reward += {0.1 * decay_factor_late}")
-                    if curr_piece.kind in ['a', 'e'] and 3 <= c <= 5 and (r <= 2 or r >= 7):
-                        reward += 0.05 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.05 * decay_factor_late
-                        strategic_count += 1
-                        logging.debug(f"Advisor/elephant in center, Reward += {0.05 * decay_factor_late}")
-                    if curr_piece.kind in ['r', 'c', 'h'] and ((r <= 2 and not curr_piece.is_red) or (r >= 7 and curr_piece.is_red)):
-                        reward += 0.15 * decay_factor_late if curr_piece.is_red == game.is_red_move() else -0.15 * decay_factor_late
-                        strategic_count += 1
-                        logging.debug(f"Critical piece in opponent half, Reward += {0.15 * decay_factor_late}")
-                if strategic_count >= 3:
-                    break
-            if strategic_count >= 3:
-                break
 
         for kind in piece_types:
             value = abs(PIECE_TO_NUMBER[(kind, True)])
@@ -506,23 +481,6 @@ class ChessAgent:
                 if captured > 0:
                     reward += min(2.0, np.log(1 + value)) * captured * decay_factor_early
                     logging.debug(f"Black captured {captured} {kind}, Reward += {min(2.0, np.log(1 + value)) * captured}")
-
-        side = 'red' if game.is_red_move() else 'black'
-        new_pawns_over_river = curr_pawns_over_river[side] - prev_pawns_over_river[side]
-        if new_pawns_over_river > 0:
-            reward += 0.1 * new_pawns_over_river * decay_factor_late
-            logging.debug(f"{side} has {new_pawns_over_river} new pawns over river, Reward += {0.1 * new_pawns_over_river}")
-
-        coordination_reward = False
-        for pos1 in critical_positions:
-            for pos2 in critical_positions:
-                if pos1 != pos2 and curr_board[pos1[0]][pos1[1]].kind == 'r' and curr_board[pos2[0]][pos2[1]].kind == 'h':
-                    reward += 0.2 * decay_factor_late
-                    coordination_reward = True
-                    logging.debug(f"Rook-horse coordination detected, Reward += 0.2")
-                    break
-            if coordination_reward:
-                break
 
         if abs(reward) > 8.0:
             logging.warning(f"Reward capped: {reward}, clamping to ±8.0")
@@ -813,7 +771,7 @@ class ChessAgent:
                     policy_probs = self.policy_network(state.unsqueeze(0)).cpu().numpy()[0]
                 for i, (move, prior) in enumerate(converted_moves_with_priors):
                     move_idx = self.encode_move(move, valid_moves)
-                    converted_moves_with_priors[i] = (move, 0.6 * prior + 0.4 * policy_probs[move_idx])
+                    converted_moves_with_priors[i] = (move, 0.5 * prior + 0.5 * policy_probs[move_idx])
                 moves, priors = zip(*converted_moves_with_priors)
                 priors = np.array(priors) / np.sum(priors)
 
@@ -1172,7 +1130,7 @@ def train_with_dataset(dataset_files = ['dataset/moves.csv'], batch_size = 1028)
                     agent.save_experience(agent.board_to_tensor(game), 0, final_reward, agent.board_to_tensor(game))
                     logging.info(f"Ván cờ {game_id} kết thúc với người thắng (dựa trên số nước đi): {winner}, Phần thưởng cuối cùng: {final_reward}")
 
-                # Huấn luyện nếu bộ đệm đủ lớn
+                # Huấn luyện nếu bộ đệm đủ lớns
                 if len(agent.replay_buffer) >= 64:
                     agent.train_main_network(batch_size=batch_size)
                     logging.info(f"Đã huấn luyện mạng với batch_size={batch_size}")
@@ -1194,5 +1152,5 @@ def train_with_dataset(dataset_files = ['dataset/moves.csv'], batch_size = 1028)
 
 if __name__ == "__main__":
     # Huấn luyện với API
-    #train_game(num_games=100000, batch_size=1028, simulations=8000)
-    train_with_dataset()
+    train_game(num_games=100000, batch_size=1028, simulations=8000)
+    #train_with_dataset()
