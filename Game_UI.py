@@ -130,6 +130,7 @@ class Game:
                             continue
 
                         opponent_wxf_move = self.opponent.get_move(self._game)
+                        # opponent_wxf_move = self.opponent.get_move(self._game, simulations=200, c_puct=2.0, policy_threshold=0.7)
                         self._curr_coord = Chinese_Chess_Game_Rules._wxf_to_index(self._game.get_board(), opponent_wxf_move, False)
                         self._make_a_move(opponent_wxf_move, black_status_rect, red_status_rect, False)
                         if self._check_for_end():  

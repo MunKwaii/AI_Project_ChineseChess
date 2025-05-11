@@ -12,7 +12,7 @@ logging.basicConfig(
 )
 
 class AlphaBetaAgent:
-    def __init__(self, max_depth=2):
+    def __init__(self, max_depth=4):
         self.max_depth = max_depth
         self.nodes_evaluated = 0  # Đếm số nút được đánh giá
     def is_capture_move(self, game, move):
@@ -69,7 +69,7 @@ class AlphaBetaAgent:
         sorted_moves = threatening_moves + capture_moves + non_capture_moves
 
         for move in sorted_moves:
-            new_game = game.copy_and_make_move_alphabeta(move)
+            new_game = game.copy_and_make_move(move)
             value = self.alpha_beta(new_game, depth=self.max_depth - 1, is_max=not is_red, alpha=alpha, beta=beta)
             
             if is_red:
@@ -137,7 +137,7 @@ class AlphaBetaAgent:
         if is_max:  # MAX player (Red)
             max_value = float('-inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move_alphabeta(move)
+                new_game = game.copy_and_make_move(move)
                 value = self.alpha_beta(new_game, depth - 1, False, alpha, beta)
                 max_value = max(max_value, value)
                 alpha = max(alpha, max_value)
@@ -147,7 +147,7 @@ class AlphaBetaAgent:
         else:  # MIN player (Black)
             min_value = float('inf')
             for move in sorted_moves:
-                new_game = game.copy_and_make_move_alphabeta(move)
+                new_game = game.copy_and_make_move(move)
                 value = self.alpha_beta(new_game, depth - 1, True, alpha, beta)
                 min_value = min(min_value, value)
                 beta = min(beta, min_value)
@@ -345,7 +345,7 @@ class AlphaBetaAgent:
         return score
 
     @staticmethod
-    def run_test(max_depth=3, fen=None):
+    def run_test(max_depth=2, fen=None):
         game = ChessGame()
         if fen:
             try:
@@ -372,7 +372,7 @@ class AlphaBetaAgent:
                 break
 
             # Lấy nước đi từ Alpha-Beta
-            move = agent.make_move(game)
+            move = agent.get_move(game)
             if not move:
                 print(f"No valid moves available for {'Red' if game.is_red_move() else 'Black'}")
                 break
@@ -390,4 +390,4 @@ class AlphaBetaAgent:
             print(f"Stopped after {_MAX_MOVES} moves: Draw")
 
 if __name__ == "__main__":
-    AlphaBetaAgent.run_test(max_depth=3)
+    AlphaBetaAgent.run_test(max_depth=2)

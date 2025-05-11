@@ -156,7 +156,7 @@ class ChineseChessAppWithAgents:
             else:  # Minimax
                 player = MinimaxAgent(max_depth=self.max_depth)
 
-            game = Game(player, self.bgm_enabled, self.sfx_enabled)
+            game = Game(player)
             game.run()
             self.status_var.set("Game ended")
         except Exception as e:
