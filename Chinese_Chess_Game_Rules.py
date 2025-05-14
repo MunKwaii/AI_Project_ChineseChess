@@ -1212,6 +1212,15 @@ def _absolute_advisor(board, pos):
 
     return points_so_far
 
+def copy_and_make_move_alphabeta(self, move):
+    return self.copy_and_make_move(move)  # Đảm bảo tương thích với mã mới
+
+# Cập nhật get_winner để kiểm tra lặp lại trạng thái
+def get_winner(self):
+    board_state = tuple(tuple((cell.kind, cell.is_red) if cell else None for cell in row) for row in self._board)
+    if self.board_history.get(board_state, 0) >= 3:
+        return 'Draw'
+    
 def piece_count(board):
     pieces_so_far = 0
     for pos in [(y, x) for y in range(0, 10) for x in range(0, 9)]:

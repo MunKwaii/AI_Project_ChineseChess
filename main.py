@@ -14,8 +14,7 @@ class ChineseChessApp:
         pygame.display.set_caption("Chinese Chess")
 
         self.chess_agent = ChessAgent(state_size=(10, 9), action_size=4000, use_api=False)
-        self.alpha_beta_agent = AlphaBetaAgent(max_depth=2)
-
+        self.alpha_beta_agent = AlphaBetaAgent(max_depth=2, xml_file='tree.xml')
         self.BACKGROUND_COLOR = (231, 191, 118)  
         self.BUTTON_COLOR = (231, 191, 118)  
         self.BUTTON_HOVER_COLOR = (139, 69, 19)  
