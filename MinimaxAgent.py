@@ -60,7 +60,11 @@ class MinimaxAgent:
         sorted_moves = capture_moves + non_capture_moves
 
         for move in sorted_moves:
+<<<<<<< HEAD
             new_game = game.copy_and_make_move_alphabeta(move)
+=======
+            new_game = game.copy_and_make_move(move)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
             value = self.minimax(new_game, depth=self.max_depth - 1, is_max=not is_red)
             
             if is_red:  # MAX player (Red)
@@ -134,14 +138,22 @@ class MinimaxAgent:
         if is_max:  # MAX player (Red)
             max_value = float('-inf')
             for move in sorted_moves:
+<<<<<<< HEAD
                 new_game = game.copy_and_make_move_alphabeta(move)
+=======
+                new_game = game.copy_and_make_move(move)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
                 value = self.minimax(new_game, depth - 1, False)
                 max_value = max(max_value, value)
             return max_value
         else:  # MIN player (Black)
             min_value = float('inf')
             for move in sorted_moves:
+<<<<<<< HEAD
                 new_game = game.copy_and_make_move_alphabeta(move)
+=======
+                new_game = game.copy_and_make_move(move)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
                 value = self.minimax(new_game, depth - 1, True)
                 min_value = min(min_value, value)
             return min_value

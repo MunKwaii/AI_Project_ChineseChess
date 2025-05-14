@@ -1,7 +1,11 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from Game_UI import Game
+<<<<<<< HEAD
 from AlphaBetaAgent import AlphaBetaAgent, RandomPlayer, LearningPlayer, Human, AIBlack
+=======
+from AlphaBetaAgent import AlphaBetaAgent
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
 from MinimaxAgent import MinimaxAgent
 from PIL import Image, ImageTk
 import os
@@ -67,6 +71,10 @@ class ChineseChessAppWithAgents:
 
     def setup_ui(self):
         self.load_images()
+<<<<<<< HEAD
+=======
+
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
         main_frame = ttk.Frame(self.root, padding="20")
         main_frame.pack(expand=True, fill=tk.BOTH)
         
@@ -77,16 +85,25 @@ class ChineseChessAppWithAgents:
         agent_frame = ttk.LabelFrame(main_frame, text="Select Opponent", padding=10)
         agent_frame.pack(pady=10, fill=tk.X)
         
+<<<<<<< HEAD
         self.selected_agent = tk.StringVar(value="Alpha-Beta")
         for agent in ["Alpha-Beta", "Minimax", "Random", "Learning", "Human", "AIBlack"]:
             ttk.Radiobutton(agent_frame, text=f"{agent} Agent", value=agent, variable=self.selected_agent).pack(side=tk.LEFT, padx=10)
         
         # Depth and XML file selection
         depth_frame = ttk.LabelFrame(main_frame, text="Settings", padding=10)
+=======
+        ttk.Radiobutton(agent_frame, text="Alpha-Beta Agent", value="Alpha-Beta", variable=self.selected_agent).pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(agent_frame, text="Minimax Agent", value="Minimax", variable=self.selected_agent).pack(side=tk.LEFT, padx=10)
+        
+        # Depth selection
+        depth_frame = ttk.LabelFrame(main_frame, text="Select Depth", padding=10)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
         depth_frame.pack(pady=10, fill=tk.X)
         
         self.depth_var = tk.StringVar(value=str(self.max_depth))
         ttk.Label(depth_frame, text="Depth:").pack(side=tk.LEFT)
+<<<<<<< HEAD
         ttk.Entry(depth_frame, textvariable=self.depth_var, width=5).pack(side=tk.LEFT, padx=5)
         
         self.xml_var = tk.StringVar(value="tree.xml")
@@ -96,6 +113,10 @@ class ChineseChessAppWithAgents:
         # Train button
         train_btn = ttk.Button(depth_frame, text="Train AI", command=self.train_ai)
         train_btn.pack(side=tk.LEFT, padx=10)
+=======
+        depth_entry = ttk.Entry(depth_frame, textvariable=self.depth_var, width=5)
+        depth_entry.pack(side=tk.LEFT, padx=5)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
         
         # Sound settings
         settings_frame = ttk.LabelFrame(main_frame, text="Sound Settings", padding=10)
@@ -158,6 +179,7 @@ class ChineseChessAppWithAgents:
     def _run_game(self):
         try:
             agent_type = self.selected_agent.get()
+<<<<<<< HEAD
             max_depth = int(self.depth_var.get())
             xml_file = self.xml_var.get()
             logging.info(f"Starting game with xml_file: {xml_file!r}")
@@ -167,12 +189,21 @@ class ChineseChessAppWithAgents:
                 return
             player = self.create_agent(agent_type, max_depth, xml_file)
             game = Game(player)
+=======
+            if agent_type == "Alpha-Beta":
+                player = AlphaBetaAgent(max_depth=self.max_depth)
+            else:  # Minimax
+                player = MinimaxAgent(max_depth=self.max_depth)
+
+            game = Game(player, self.bgm_enabled, self.sfx_enabled)
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
             game.run()
             self.status_var.set("Game ended")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start game: {str(e)}")
             self.status_var.set("Error starting game")
 
+<<<<<<< HEAD
     def train_ai(self):
         try:
             agent_type = self.selected_agent.get()
@@ -213,6 +244,8 @@ class ChineseChessAppWithAgents:
             return AIBlack(xml_file=xml_file, max_depth=max_depth)
         raise ValueError(f"Unknown agent type: {agent_type}")
 
+=======
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
 if __name__ == "__main__":
     root = tk.Tk()
     app = ChineseChessAppWithAgents(root)

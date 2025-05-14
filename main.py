@@ -12,9 +12,19 @@ class ChineseChessApp:
         self.screen_height = 700
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         pygame.display.set_caption("Chinese Chess")
+<<<<<<< HEAD
 
         self.chess_agent = ChessAgent(state_size=(10, 9), action_size=4000, use_api=False)
         self.alpha_beta_agent = AlphaBetaAgent(max_depth=2, xml_file='tree.xml')
+=======
+
+        self.chess_agent = ChessAgent(state_size=(10, 9), action_size=4000)
+        model_path = "trained_models/chinese_chess_alpha.pth"
+        if os.path.exists(model_path):
+            print(f"Loaded ChessAgent model from {model_path}")
+        self.alpha_beta_agent = AlphaBetaAgent(max_depth=3)
+
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
         self.BACKGROUND_COLOR = (231, 191, 118)  
         self.BUTTON_COLOR = (231, 191, 118)  
         self.BUTTON_HOVER_COLOR = (139, 69, 19)  

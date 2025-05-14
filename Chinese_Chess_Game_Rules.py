@@ -85,6 +85,10 @@ class ChessGame:
         new_game = ChessGame(board=new_board,
                              red_active=not self._is_red_active,
                              move_count=self._move_count + 1)
+<<<<<<< HEAD
+=======
+        #new_game._valid_moves = []
+>>>>>>> f17bfe4321147cbf284676e016be50f7c215acf3
         new_game._recalculate_valid_moves()
         return new_game
 
